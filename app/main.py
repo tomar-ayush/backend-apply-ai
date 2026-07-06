@@ -1,11 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import structlog
 
 from app.config import settings
 from app.common.exceptions import AppException
-from app.common.logging import configure_logging
+from app.common.logging import configure_logging, get_logger
 from app.auth.router import router as auth_router
 from app.users.router import router as users_router
 from app.jobs.router import router as jobs_router
@@ -13,7 +12,7 @@ from app.referrals.router import router as referrals_router
 from app.tasks.router import router as tasks_router
 
 configure_logging()
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 app = FastAPI(
     title="AI Job Application API",
@@ -35,13 +34,13 @@ app.add_middleware(
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
-    logger.warning("app_exception", status_code=exc.status_code, detail=exc.detail)
+    logger.warning("app_exception status_code=%s detail=%s", exc.status_code, exc.detail)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("unhandled_exception", error=str(exc))
+    logger.exception("unhandled_exception %s", str(exc))
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 

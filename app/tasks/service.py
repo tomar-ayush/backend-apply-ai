@@ -1,5 +1,5 @@
 import uuid
-import structlog
+from app.common.logging import get_logger
 from typing import List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,7 @@ from app.jobs.repository import JobRepository
 from app.users.models import User
 from app.common.exceptions import NotFoundError, InvalidTransitionError, ForbiddenError
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class TaskService:
@@ -31,7 +31,7 @@ class TaskService:
             payload=req.payload,
             status=TaskStatus.QUEUED,
         )
-        logger.info("task_created", task_id=str(task.id), type=req.task_type.value)
+        logger.info("task_created task_id=%s type=%s", str(task.id), req.task_type.value)
         return task
 
     async def get(self, task_id: uuid.UUID, user: User) -> Task:
@@ -52,10 +52,10 @@ class TaskService:
         # Idempotency: ignore updates to terminal tasks
         if task.status in TERMINAL_TASK_STATUSES:
             logger.info(
-                "task_update_ignored_terminal",
-                task_id=str(task_id),
-                current=task.status.value,
-                requested=req.status.value,
+                "task_update_ignored_terminal task_id=%s current=%s requested=%s",
+                str(task_id),
+                task.status.value,
+                req.status.value,
             )
             return task
 
@@ -67,5 +67,5 @@ class TaskService:
             updates["error_message"] = req.error_message
 
         task = await self.repo.update(task, **updates)
-        logger.info("task_updated", task_id=str(task_id), status=req.status.value)
+        logger.info("task_updated task_id=%s status=%s", str(task_id), req.status.value)
         return task

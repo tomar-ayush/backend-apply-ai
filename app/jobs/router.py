@@ -27,7 +27,11 @@ async def create_job(
     db: AsyncSession = Depends(get_db),
 ):
     job = await JobService(db).create(req, current_user)
-    return JobResponse.model_validate(job)
+    if job is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=500, detail="Failed to create job")
+    return job
 
 
 @router.get("", response_model=JobListResponse)
@@ -46,7 +50,11 @@ async def get_job(
     db: AsyncSession = Depends(get_db),
 ):
     job = await JobService(db).get(job_id, current_user)
-    return JobResponse.model_validate(job)
+    if job is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @router.delete("/{job_id}", status_code=204)
@@ -66,7 +74,11 @@ async def update_job_status(
     db: AsyncSession = Depends(get_db),
 ):
     job = await JobService(db).update_status(job_id, req.status, current_user)
-    return JobResponse.model_validate(job)
+    if job is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=500, detail="Failed to update job")
+    return job
 
 
 # --- JD routes ---
@@ -79,7 +91,11 @@ async def get_jd(
 ):
     await JobService(db).get(job_id, current_user)
     jd = await JobJDService(db).get_by_job_id(job_id)
-    return JobJDResponse.model_validate(jd)
+    if jd is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Job JD not found")
+    return jd
 
 
 @router.post("/{job_id}/parse", response_model=JobJDResponse)
@@ -91,7 +107,11 @@ async def reparse_jd(
     job = await JobService(db).get(job_id, current_user)
     jd_svc = JobJDService(db)
     jd, _ = await jd_svc.parse_and_store(job.id, job.workday_url, current_user)
-    return JobJDResponse.model_validate(jd)
+    if jd is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=500, detail="Failed to parse job JD")
+    return jd
 
 
 # --- Referral routes ---
@@ -114,7 +134,7 @@ async def list_referrals(
 ):
     await JobService(db).get(job_id, current_user)
     referrals = await ReferralService(db).list_by_job(job_id)
-    return [ReferralResponse.model_validate(r) for r in referrals]
+    return referrals
 
 
 # --- Resume routes ---

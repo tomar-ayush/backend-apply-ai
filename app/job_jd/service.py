@@ -1,5 +1,5 @@
 import uuid
-import structlog
+from app.common.logging import get_logger
 from typing import Optional
 
 import httpx
@@ -15,7 +15,7 @@ from app.llm.prompts import JD_PARSE_SYSTEM, JD_PARSE_USER
 from app.common.exceptions import NotFoundError, BadRequestError, ExternalServiceError
 from app.users.service import UserService
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 JD_CLOSED_SIGNALS = [
     "job is no longer available",
@@ -80,7 +80,7 @@ class JobJDService:
         if not llm_key or not user.llm_provider:
             raise BadRequestError("LLM provider and API key must be configured in your profile")
 
-        logger.info("jd_fetch_start", job_id=str(job_id), url=workday_url)
+        logger.info("jd_fetch_start job_id=%s url=%s", str(job_id), workday_url)
         raw_html, raw_text = await fetch_jd_html(workday_url)
 
         if _is_job_closed(raw_text):
@@ -89,7 +89,7 @@ class JobJDService:
         llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
         prompt = JD_PARSE_USER.format(raw_text=raw_text[:12000])
 
-        logger.info("jd_llm_parse_start", job_id=str(job_id))
+        logger.info("jd_llm_parse_start job_id=%s", str(job_id))
         parsed = await llm.complete_json(system=JD_PARSE_SYSTEM, user=prompt)
 
         jd = await self.repo.upsert(
@@ -101,5 +101,5 @@ class JobJDService:
             team_signals=parsed.get("team_signals"),
             llm_summary=parsed.get("llm_summary"),
         )
-        logger.info("jd_parsed", job_id=str(job_id))
+        logger.info("jd_parsed job_id=%s", str(job_id))
         return jd, parsed

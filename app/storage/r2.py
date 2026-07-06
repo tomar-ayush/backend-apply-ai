@@ -1,5 +1,5 @@
 import io
-import structlog
+from app.common.logging import get_logger
 from typing import Optional
 
 import boto3
@@ -8,7 +8,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.config import settings
 from app.common.exceptions import ExternalServiceError
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class R2Storage:
@@ -39,7 +39,7 @@ class R2Storage:
             )
             return self._public_url(key)
         except (BotoCoreError, ClientError) as e:
-            logger.error("r2_upload_error", key=key, error=str(e))
+            logger.error("r2_upload_error key=%s error=%s", key, str(e))
             raise ExternalServiceError("R2", str(e))
 
     def upload_text(self, key: str, text: str, content_type: str = "text/plain") -> str:
@@ -51,7 +51,7 @@ class R2Storage:
             response = client.get_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
             return response["Body"].read()
         except (BotoCoreError, ClientError) as e:
-            logger.error("r2_download_error", key=key, error=str(e))
+            logger.error("r2_download_error key=%s error=%s", key, str(e))
             raise ExternalServiceError("R2", str(e))
 
     def download_text(self, key: str) -> str:
@@ -70,7 +70,7 @@ class R2Storage:
             client = self._get_client()
             client.delete_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
         except (BotoCoreError, ClientError) as e:
-            logger.error("r2_delete_error", key=key, error=str(e))
+            logger.error("r2_delete_error key=%s error=%s", key, str(e))
 
 
 r2_storage = R2Storage()

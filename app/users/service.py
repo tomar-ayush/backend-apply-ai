@@ -1,5 +1,5 @@
 import uuid
-import structlog
+from app.common.logging import get_logger
 from typing import Optional
 
 from fastapi import UploadFile
@@ -12,7 +12,7 @@ from app.common.security import encrypt, decrypt
 from app.common.exceptions import NotFoundError
 from app.storage.r2 import r2_storage
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class UserService:
@@ -94,7 +94,7 @@ class UserService:
         if updates:
             await self.repo.update(user, **updates)
 
-        logger.info("resume_uploaded", user_id=str(user.id), has_pdf=bool(pdf_url), has_latex=bool(latex_url))
+        logger.info("resume_uploaded user_id=%s has_pdf=%s has_latex=%s", str(user.id), bool(pdf_url), bool(latex_url))
         return ResumeUploadResponse(
             pdf_url=pdf_url,
             latex_url=latex_url,

@@ -2,7 +2,7 @@ import uuid
 import os
 import subprocess
 import tempfile
-import structlog
+from app.common.logging import get_logger
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +18,7 @@ from app.storage.r2 import r2_storage
 from app.resumes.schemas import GenerateResumeResponse, ResumeResponse
 from app.common.exceptions import BadRequestError, NotFoundError
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 def _compile_latex_to_pdf(latex_content: str) -> Optional[bytes]:
@@ -46,7 +46,7 @@ def _compile_latex_to_pdf(latex_content: str) -> Optional[bytes]:
                 with open(pdf_path, "rb") as f:
                     return f.read()
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.warning("latex_compile_failed", error=str(e))
+        logger.warning("latex_compile_failed error=%s", str(e))
     return None
 
 
@@ -84,7 +84,7 @@ class ResumeService:
             latex_content=original_latex,
         )
 
-        logger.info("resume_optimize_start", job_id=str(job.id))
+        logger.info("resume_optimize_start job_id=%s", str(job.id))
         optimized_latex = await llm.complete(system=RESUME_OPTIMIZE_SYSTEM, user=prompt)
 
         latex_key = f"jobs/{job.id}/optimized_resume.tex"
@@ -96,7 +96,7 @@ class ResumeService:
             pdf_key = f"jobs/{job.id}/optimized_resume.pdf"
             pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, "application/pdf")
         else:
-            logger.warning("pdf_compilation_skipped", job_id=str(job.id))
+            logger.warning("pdf_compilation_skipped job_id=%s", str(job.id))
 
         await self.job_repo.update(
             job,
@@ -105,7 +105,7 @@ class ResumeService:
             status=JobStatus.RESUME_GENERATED,
         )
 
-        logger.info("resume_generated", job_id=str(job.id), has_pdf=bool(pdf_url))
+        logger.info("resume_generated job_id=%s has_pdf=%s", str(job.id), bool(pdf_url))
         return GenerateResumeResponse(
             latex_url=latex_url,
             pdf_url=pdf_url,

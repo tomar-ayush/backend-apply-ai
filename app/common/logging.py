@@ -1,26 +1,34 @@
 import logging
-import structlog
+from typing import Optional
 
 
-def configure_logging() -> None:
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer(),
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
+class SimpleFormatter(logging.Formatter):
+    def __init__(self) -> None:
+        fmt = "[%(asctime)s][%(filename)s][%(levelname)s] %(message)s"
+        # ISO-like timestamp with timezone offset
+        datefmt = "%Y-%m-%dT%H:%M:%S%z"
+        super().__init__(fmt=fmt, datefmt=datefmt)
 
-    logging.basicConfig(
-        format="%(message)s",
-        level=logging.INFO,
-    )
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """Configure the root logger with a simple, consistent formatter.
+
+    Format: [timestamp][filename][LEVEL] message
+    """
+    root = logging.getLogger()
+    # avoid double handlers if configure_logging called multiple times
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(SimpleFormatter())
+        root.addHandler(handler)
+    root.setLevel(level)
+
+
+def get_logger(name: Optional[str] = None) -> logging.Logger:
+    """Return a logger configured with the common formatting.
+
+    Call `configure_logging()` early (e.g. in `app.main`) to ensure the root
+    handler and formatter are installed. If not called explicitly, this will
+    still return a logger but the caller should ensure configuration is done.
+    """
+    return logging.getLogger(name)

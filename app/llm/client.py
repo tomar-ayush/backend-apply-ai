@@ -1,10 +1,10 @@
 import json
-import structlog
+from app.common.logging import get_logger
 from typing import Any, Dict, Optional
 
 from app.common.exceptions import ExternalServiceError, BadRequestError
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class LLMClient:
@@ -42,7 +42,7 @@ class LLMClient:
             else:
                 return await self._anthropic_complete(system, user, model, max_tokens)
         except Exception as e:
-            logger.error("llm_error", provider=self.provider, error=str(e))
+            logger.error("llm_error provider=%s error=%s", self.provider, str(e))
             raise ExternalServiceError("LLM", str(e))
 
     async def _openai_complete(self, system: str, user: str, model: Optional[str], max_tokens: int) -> str:
@@ -82,5 +82,5 @@ class LLMClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.error("llm_json_parse_error", raw=raw[:200], error=str(e))
+            logger.error("llm_json_parse_error raw=%s error=%s", raw[:200], str(e))
             raise ExternalServiceError("LLM", f"Response was not valid JSON: {str(e)}")

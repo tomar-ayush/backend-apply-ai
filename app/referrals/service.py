@@ -1,6 +1,6 @@
 import uuid
 import json
-import structlog
+from app.common.logging import get_logger
 from datetime import datetime, timezone
 from typing import List
 
@@ -18,7 +18,7 @@ from app.llm.client import LLMClient
 from app.llm.prompts import REFERRAL_SEARCH_SYSTEM, REFERRAL_SEARCH_USER
 from app.common.exceptions import NotFoundError, InvalidTransitionError, BadRequestError, ForbiddenError
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 GOOGLE_SEARCH_URL = "https://www.googleapis.com/customsearch/v1"
 
@@ -34,7 +34,7 @@ async def _google_search(api_key: str, engine_id: str, query: str, num: int = 10
             data = resp.json()
             return data.get("items", [])
         except Exception as e:
-            logger.warning("google_search_failed", query=query, error=str(e))
+            logger.warning("google_search_failed query=%s error=%s", query, str(e))
             return []
 
 
@@ -90,7 +90,7 @@ class ReferralService:
                     candidates.append(c)
 
         if not candidates:
-            logger.warning("no_referral_candidates", job_id=str(job.id))
+            logger.warning("no_referral_candidates job_id=%s", str(job.id))
             return GenerateReferralsResponse(generated=0, referrals=[])
 
         records = [
@@ -98,7 +98,7 @@ class ReferralService:
             for c in candidates
         ]
         referrals = await self.repo.create_many(records)
-        logger.info("referrals_generated", job_id=str(job.id), count=len(referrals))
+        logger.info("referrals_generated job_id=%s count=%s", str(job.id), len(referrals))
 
         return GenerateReferralsResponse(
             generated=len(referrals),
