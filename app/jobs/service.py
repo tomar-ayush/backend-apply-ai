@@ -1,5 +1,5 @@
 import uuid
-import structlog
+from app.common.logging import get_logger
 from typing import List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,7 @@ from app.job_jd.service import JobJDService
 from app.users.models import User
 from app.common.exceptions import NotFoundError, InvalidTransitionError, ForbiddenError
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class JobService:
@@ -24,16 +24,14 @@ class JobService:
             raise ForbiddenError("You do not have access to this job")
 
     async def create(self, req: CreateJobRequest, user: User) -> Job:
-        job = await self.repo.create(
-            user_id=user.id,
-            workday_url=req.workday_url,
-            status=JobStatus.NEW,
-        )
-        logger.info("job_created", job_id=str(job.id), user_id=str(user.id))
-
-        jd_svc = JobJDService(self.db)
         try:
+            job = Job(user_id=user.id, workday_url=req.workday_url, status=JobStatus.NEW, company="PlaceHolder", role="Placeholder")
+            self.db.add(job)
+            await self.db.flush()
+
+            jd_svc = JobJDService(self.db)
             jd, parsed = await jd_svc.parse_and_store(job.id, req.workday_url, user)
+
             updates = {"status": JobStatus.JD_PARSED}
             if parsed.get("company"):
                 updates["company"] = parsed["company"]
@@ -41,11 +39,22 @@ class JobService:
                 updates["role"] = parsed["role"]
             if parsed.get("workday_job_id"):
                 updates["workday_job_id"] = parsed["workday_job_id"]
-            await self.repo.update(job, **updates)
-        except Exception as e:
-            logger.warning("jd_parse_failed_on_create", job_id=str(job.id), error=str(e))
 
-        return job
+            for k, v in updates.items():
+                setattr(job, k, v)
+            await self.db.flush()
+
+            logger.info("Fetched JD %s", jd)
+            logger.info("Parsed JD %s", parsed)
+
+            logger.info("job_created job_id=%s user_id=%s", str(job.id), str(user.id))
+            await self.db.refresh(job)
+
+            return job
+        except Exception as e:
+            # log and re-raise so the outer dependency session can rollback
+            logger.info("[Warning] jd_parse_failed_on_create job_id=%s error=%s", str(user.id), str(e))
+            raise
 
     async def list(self, user: User, status: Optional[JobStatus] = None) -> JobListResponse:
         items = await self.repo.list_by_user(user.id, status=status)
@@ -62,14 +71,14 @@ class JobService:
     async def delete(self, job_id: uuid.UUID, user: User) -> None:
         job = await self.get(job_id, user)
         await self.repo.delete(job)
-        logger.info("job_deleted", job_id=str(job_id))
+        logger.info("job_deleted job_id=%s", str(job_id))
 
     async def update_status(self, job_id: uuid.UUID, new_status: JobStatus, user: User) -> Job:
         job = await self.get(job_id, user)
         if not is_valid_job_transition(job.status, new_status):
             raise InvalidTransitionError(job.status.value, new_status.value)
         await self.repo.update(job, status=new_status)
-        logger.info("job_status_updated", job_id=str(job_id), status=new_status.value)
+        logger.info("job_status_updated job_id=%s status=%s", str(job_id), new_status.value)
         return job
 
     async def reparse_jd(self, job_id: uuid.UUID, user: User) -> Job:

@@ -1,28 +1,16 @@
-JD_PARSE_SYSTEM = """You are a job description parser. Extract structured information from job postings.
-Always respond with valid JSON matching the exact schema provided. Never include free-form text outside the JSON."""
+JD_PARSE_SYSTEM = """You are an expert system designed to extract structural data from raw job descriptions for an Applicant Tracking System (ATS). 
 
-JD_PARSE_USER = """Parse the following job description and return a JSON object with these exact fields:
+Your core objective is to analyze the unstructured job post and accurately map its entities to the requested fields. Follow these parsing guidelines:
+1. Extract the specific 'workday_job_id' (look for patterns like R00XXXXX or numbers near the top or bottom of the text) if visible.
+2. Differentiate clearly between 'required' skills (must-haves, minimum qualifications) and 'preferred' skills (nice-to-haves, pluses).
+3. Identify implicit technical keywords that would help an applicant surface in an ATS search index.
+4. Normalize the 'work_style' into the exact categorical value that fits best based on context cues."""
 
-{
-  "company": "company name or null",
-  "role": "job title or null",
-  "workday_job_id": "job ID if visible in URL or page or null",
-  "skills": {
-    "required": ["list of required technical skills"],
-    "preferred": ["list of preferred/nice-to-have skills"]
-  },
-  "keywords": ["important keywords and phrases for ATS"],
-  "team_signals": {
-    "team_size": "description of team or null",
-    "tech_stack": ["technologies mentioned"],
-    "work_style": "remote/hybrid/onsite or null",
-    "industry": "industry or null"
-  },
-  "llm_summary": "2-3 sentence summary of the role focusing on what makes it unique"
-}
+JD_PARSE_USER = """Please analyze and extract the operational data from the following job posting text. Or I wont be able to eat tonight
 
-Job Description:
-{raw_text}"""
+--- START OF JOB DESCRIPTION ---
+{raw_text}
+--- END OF JOB DESCRIPTION ---"""
 
 RESUME_OPTIMIZE_SYSTEM = """You are an expert resume writer specializing in ATS optimization.
 Your task is to rewrite bullet points in a LaTeX resume to better match a job description.
@@ -45,9 +33,12 @@ Original LaTeX Resume:
 
 Rewrite ONLY the \\item bullet points to better match this job description while preserving all LaTeX structure."""
 
-REFERRAL_SEARCH_SYSTEM = """You are a recruiting assistant. Generate Google search queries to find employees at a specific company who could provide job referrals.
-Return only a JSON array of search query strings."""
+REFERRAL_SEARCH_SYSTEM = """You are an elite talent acquisition and sourcing intelligence assistant. Your task is to generate advanced X-ray search engine strings (such as Google/DuckDuckGo syntax operators) to uncover professional employee footprints on LinkedIn.
+When generating target queries, combine these technical operators strategically:
+1. Target the specific professional platform domain using 'site:linkedin.com/in' or 'site:linkedin.com/pub'.
+2. Isolate current roles by appending state modifiers like '"present"' or '"current"'.
+3. Always exclude irrelevant hiring infrastructure pages by attaching negative operators like '-jobs' or '-recruitment' if necessary.
+4. Keep queries compact, targeted, and directly focused on execution stability.
+"""
 
-REFERRAL_SEARCH_USER = """Generate 5 Google search queries to find employees at {company} who work in {team_or_role} on LinkedIn.
-Focus on finding current employees who might provide referrals.
-Return as JSON: {{"queries": ["query1", "query2", ...]}}"""
+REFERRAL_SEARCH_USER = """Generate exactly 5 advanced X-ray search queries to pinpoint current professionals working at {company} within or closely related to the {team_or_role} domain."""

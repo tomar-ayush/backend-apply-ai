@@ -6,8 +6,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.config import settings
 from app.database.session import Base
-# Import all models so Alembic can detect them
 import app.users.models
 import app.jobs.models
 import app.job_jd.models
@@ -21,8 +21,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-database_url = os.getenv("DATABASE_URL_SYNC", config.get_main_option("sqlalchemy.url"))
-config.set_main_option("sqlalchemy.url", database_url)
+# Use pydantic-settings (which loads .env) rather than raw os.getenv
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
 
 
 def run_migrations_offline() -> None:

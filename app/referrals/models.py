@@ -47,6 +47,7 @@ class Referral(Base):
         nullable=False,
         default=ReferralStatus.NOT_CONTACTED,
     )
+    priority: Mapped[Optional[int]] = mapped_column(default=5)
     asked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 

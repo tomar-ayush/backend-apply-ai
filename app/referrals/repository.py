@@ -19,7 +19,6 @@ class ReferralRepository:
         result = await self.db.execute(
             select(Referral)
             .where(Referral.job_id == job_id)
-            .order_by(Referral.created_at.desc())
         )
         return list(result.scalars().all())
 

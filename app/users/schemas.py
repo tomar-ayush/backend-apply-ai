@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Literal
 
-from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
+from pydantic import BaseModel, EmailStr, field_validator
+
+SUPPORTED_LLM_PROVIDERS = {"openai", "anthropic", "claude", "gemini", "google"}
 
 
 class UserProfile(BaseModel):
@@ -67,6 +69,15 @@ class UpdateUserRequest(BaseModel):
     llm_api_key: Optional[str] = None
     google_search_api_key: Optional[str] = None
     google_search_engine_id: Optional[str] = None
+
+    @field_validator("llm_provider")
+    @classmethod
+    def validate_provider(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v.lower() not in SUPPORTED_LLM_PROVIDERS:
+            raise ValueError(
+                f"llm_provider must be one of: {', '.join(sorted(SUPPORTED_LLM_PROVIDERS))}"
+            )
+        return v.lower() if v else v
 
 
 class ResumeUploadResponse(BaseModel):

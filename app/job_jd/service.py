@@ -1,3 +1,5 @@
+import html as _html_mod
+import json as _json
 import uuid
 from app.common.logging import get_logger
 from typing import Optional
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.job_jd.models import JobJD
 from app.job_jd.repository import JobJDRepository
 from app.job_jd.schemas import JobJDResponse
+from app.llm.schemas import JobParseSchema
 from app.users.models import User
 from app.llm.client import LLMClient
 from app.llm.prompts import JD_PARSE_SYSTEM, JD_PARSE_USER
@@ -32,7 +35,49 @@ def _is_job_closed(text: str) -> bool:
     return any(signal in lower for signal in JD_CLOSED_SIGNALS)
 
 
-async def fetch_jd_html(url: str) -> tuple[str, str]:
+def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
+    """Extract job description and metadata from JSON-LD JobPosting schema.
+
+    Workday and similar SPAs embed the full JD in structured data even though
+    the visible page body is empty (JS-rendered). This is our primary text source.
+    """
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = _json.loads(script.string or "")
+        except (_json.JSONDecodeError, TypeError):
+            continue
+        if data.get("@type") != "JobPosting":
+            continue
+        description = _html_mod.unescape(data.get("description", ""))
+        if not description:
+            continue
+        meta: dict = {}
+        if data.get("title"):
+            meta["role"] = data["title"]
+        org = data.get("hiringOrganization") or {}
+        if org.get("name"):
+            # Strip leading numeric tenant IDs like "8297 Sandvik Mining..."
+            name = org["name"].strip()
+            if name and name[0].isdigit():
+                parts = name.split(" ", 1)
+                if len(parts) == 2:
+                    name = parts[1]
+            meta["company"] = name
+        identifier = data.get("identifier") or {}
+        if identifier.get("value"):
+            meta["workday_job_id"] = str(identifier["value"])
+        return description, meta
+    return "", {}
+
+
+def _extract_og_description(soup: BeautifulSoup) -> str:
+    tag = soup.find("meta", {"property": "og:description"})
+    if tag and tag.get("content"):
+        return _html_mod.unescape(tag["content"])
+    return ""
+
+
+async def fetch_jd_html(url: str) -> tuple[str, str, dict]:
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         try:
             response = await client.get(
@@ -53,10 +98,25 @@ async def fetch_jd_html(url: str) -> tuple[str, str]:
 
     html = response.text
     soup = BeautifulSoup(html, "lxml")
+
+    # JSON-LD must be read before script tags are decomposed
+    jsonld_text, extracted_meta = _extract_jsonld_meta(soup)
+    og_text = _extract_og_description(soup)
+
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
-    text = soup.get_text(separator="\n", strip=True)
-    return html, text
+
+    if jsonld_text:
+        logger.info("jd_source=jsonld extracted_meta_keys=%s", list(extracted_meta.keys()))
+        return html, jsonld_text, extracted_meta
+
+    if og_text:
+        logger.info("jd_source=og_description")
+        return html, og_text, {}
+
+    # Last resort: visible text (works for non-SPA job boards)
+    lines = [ln.strip() for ln in soup.get_text(separator="\n").splitlines() if ln.strip()]
+    return html, "\n".join(lines), {}
 
 
 class JobJDService:
@@ -78,19 +138,34 @@ class JobJDService:
         user_svc = UserService(None)
         llm_key = user_svc.get_decrypted_llm_key(user)
         if not llm_key or not user.llm_provider:
+            logger.info("[ERROR]: LLM provider and API key must be configured in your profile")
             raise BadRequestError("LLM provider and API key must be configured in your profile")
 
         logger.info("jd_fetch_start job_id=%s url=%s", str(job_id), workday_url)
-        raw_html, raw_text = await fetch_jd_html(workday_url)
+        raw_html, raw_text, extracted_meta = await fetch_jd_html(workday_url)
+        logger.info("jd_fetched job_id=%s text_len=%s source_keys=%s", str(job_id), len(raw_text), list(extracted_meta.keys()))
 
         if _is_job_closed(raw_text):
             raise BadRequestError("This job posting is no longer available or has been closed")
 
+        if not raw_text.strip():
+            logger.warning("jd_text_empty job_id=%s url=%s", str(job_id), workday_url)
+            raise BadRequestError(
+                "Failed to extract job text from the page. The page may require JavaScript rendering."
+            )
+
         llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
         prompt = JD_PARSE_USER.format(raw_text=raw_text[:12000])
+        logger.info("prompt len: %s", len(prompt))
 
         logger.info("jd_llm_parse_start job_id=%s", str(job_id))
-        parsed = await llm.complete_json(system=JD_PARSE_SYSTEM, user=prompt)
+        parsed = await llm.complete_json(system=JD_PARSE_SYSTEM, user=prompt, model=None, response_schema=JobParseSchema)
+
+        logger.info("llm response: %s", parsed)
+
+        parsed["company"] = parsed.get("company") or "PlaceHolder"
+        parsed["role"] = parsed.get("role") or "Placeholder"
+        parsed["workday_job_id"] = parsed.get("workday_job_id") or "pls update your jobId here"
 
         jd = await self.repo.upsert(
             job_id=job_id,
