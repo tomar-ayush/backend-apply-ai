@@ -37,6 +37,10 @@ class ReferralRepository:
             await self.db.refresh(r)
         return referrals
 
+    async def delete(self, referral: Referral) -> None:
+        await self.db.delete(referral)
+        await self.db.flush()
+
     async def update(self, referral: Referral, **kwargs) -> Referral:
         for key, value in kwargs.items():
             setattr(referral, key, value)

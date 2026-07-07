@@ -15,6 +15,7 @@ from app.referrals.schemas import UpdateReferralRequest, GenerateReferralsRespon
 from app.jobs.models import Job
 from app.users.models import User
 from app.job_jd.repository import JobJDRepository
+from app.jobs.repository import JobRepository
 from app.llm.client import LLMClient
 from app.llm.prompts import REFERRAL_SEARCH_SYSTEM, REFERRAL_SEARCH_USER
 from app.common.exceptions import NotFoundError, InvalidTransitionError, BadRequestError, ForbiddenError
@@ -210,10 +211,17 @@ class ReferralService:
     async def list_by_job(self, job_id: uuid.UUID) -> List[Referral]:
         return await self.repo.list_by_job(job_id)
 
-    async def update(self, referral_id: uuid.UUID, req: UpdateReferralRequest, user: User) -> Referral:
+    async def _get_and_assert_ownership(self, referral_id: uuid.UUID, user: User) -> Referral:
         referral = await self.repo.get_by_id(referral_id)
         if referral is None:
             raise NotFoundError("Referral", str(referral_id))
+        job = await JobRepository(self.db).get_by_id(referral.job_id)
+        if job is None or job.user_id != user.id:
+            raise ForbiddenError("You do not have access to this referral")
+        return referral
+
+    async def update(self, referral_id: uuid.UUID, req: UpdateReferralRequest, user: User) -> Referral:
+        referral = await self._get_and_assert_ownership(referral_id, user)
 
         if not is_valid_referral_transition(referral.status, req.status):
             raise InvalidTransitionError(referral.status.value, req.status.value)
@@ -229,3 +237,8 @@ class ReferralService:
             updates["responded_at"] = now
 
         return await self.repo.update(referral, **updates)
+
+    async def delete(self, referral_id: uuid.UUID, user: User) -> None:
+        referral = await self._get_and_assert_ownership(referral_id, user)
+        await self.repo.delete(referral)
+        logger.info("referral_deleted referral_id=%s user_id=%s", str(referral_id), str(user.id))
