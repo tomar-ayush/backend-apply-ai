@@ -12,7 +12,6 @@ class Settings(BaseSettings):
         enable_decoding=False,
         extra="ignore",
     )
-    # Keep only safe defaults here. Require production / sensitive values from env.
     APP_ENV: str = "development"
     SECRET_KEY: str
     ENCRYPTION_KEY: str
@@ -30,6 +29,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
 
     ALLOWED_ORIGINS: List[str]
+
+    API_BASE_URL: str = "http://localhost:8000"
 
     # DATABASE_URL normalization removed from Settings model —
     # normalization is handled in the DB session setup so the raw env value

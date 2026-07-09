@@ -44,3 +44,7 @@ class TaskRepository:
         await self.db.flush()
         await self.db.refresh(task)
         return task
+
+    async def delete(self, task: Task) -> None:
+        await self.db.delete(task)
+        await self.db.flush()

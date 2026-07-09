@@ -52,3 +52,23 @@ def decode_access_token(token: str) -> str:
         return subject
     except JWTError:
         raise UnauthorizedError("Invalid or expired token")
+
+
+def create_callback_token(task_id: str, expire_hours: int = 1) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
+    payload = {"sub": task_id, "purpose": "agent_callback", "exp": expire}
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def verify_callback_token(token: str) -> str:
+    from app.common.exceptions import ForbiddenError
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        if payload.get("purpose") != "agent_callback":
+            raise ForbiddenError("Invalid callback token")
+        task_id: Optional[str] = payload.get("sub")
+        if not task_id:
+            raise ForbiddenError("Invalid callback token")
+        return task_id
+    except JWTError:
+        raise ForbiddenError("Invalid or expired callback token")

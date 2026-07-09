@@ -1,4 +1,5 @@
 import uuid
+from enum import Enum
 from datetime import datetime
 from typing import Optional, Any, Dict
 
@@ -30,3 +31,45 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+class stateEnum(str, Enum):
+    completed = "completed"
+    failed = "failed"
+
+class TriggerWorkdayRequest(BaseModel):
+    """Fields supplied by the frontend to launch a local Workday automation."""
+    job_id: uuid.UUID
+    job_url: str
+    resume_url: str
+    worker_url: str  # Cloudflare tunnel / local URL of the Workday worker
+
+
+class TriggerWorkdayResponse(BaseModel):
+    queued: bool
+    task_id: uuid.UUID
+
+
+class WorkdayCallbackRequest(BaseModel):
+    """Posted back by the worker once the automation finishes."""
+    state: stateEnum  # "completed" | "failed"
+    error: Optional[str] = None
+    token: str
+
+
+class TriggerLinkedinRequest(BaseModel):
+    """Fields supplied by the frontend to launch the LinkedIn connect agent for a referral."""
+    linkedin_url: str
+    message: str
+    agent_url: str  # Cloudflare tunnel / local URL of the LinkedIn agent
+
+
+class TriggerLinkedinResponse(BaseModel):
+    queued: bool
+    referral_id: uuid.UUID
+
+
+class LinkedinCallbackRequest(BaseModel):
+    """Posted back by the LinkedIn agent once the connect attempt finishes."""
+    state: stateEnum  # "completed" | "failed"
+    error: Optional[str] = None
+    token: str

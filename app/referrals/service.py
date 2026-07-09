@@ -13,15 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.referrals.models import Referral, ReferralStatus, is_valid_referral_transition
 from app.referrals.repository import ReferralRepository
-from app.referrals.schemas import UpdateReferralRequest, GenerateReferralsResponse, ReferralResponse, ReferralSearchSchema, ConnectReferralRequest, AgentCallbackRequest, ConnectReferralResponse
+from app.referrals.schemas import UpdateReferralRequest, GenerateReferralsResponse, ReferralResponse, ReferralSearchSchema
 from app.jobs.models import Job
 from app.users.models import User
 from app.job_jd.repository import JobJDRepository
 from app.jobs.repository import JobRepository
 from app.llm.client import LLMClient
 from app.llm.prompts import REFERRAL_SEARCH_SYSTEM, REFERRAL_SEARCH_USER
-from app.common.exceptions import NotFoundError, InvalidTransitionError, BadRequestError, ForbiddenError, ExternalServiceError
-from app.common.security import create_callback_token, verify_callback_token
+from app.common.exceptions import NotFoundError, InvalidTransitionError, BadRequestError, ForbiddenError
 from app.config import settings
 
 from ddgs import DDGS
@@ -273,61 +272,3 @@ class ReferralService:
         referral = await self._get_and_assert_ownership(referral_id, user)
         await self.repo.delete(referral)
         logger.info("referral_deleted referral_id=%s user_id=%s", str(referral_id), str(user.id))
-
-    async def connect(
-        self, referral_id: uuid.UUID, req: ConnectReferralRequest, user: User
-    ) -> ConnectReferralResponse:
-        referral = await self._get_and_assert_ownership(referral_id, user)
-
-        callback_token = create_callback_token(str(referral_id))
-        callback_url = f"{settings.API_BASE_URL.rstrip('/')}/referrals/{referral_id}/callback"
-
-        normalized_linkedin_url = _normalize_linkedin_url(req.linkedin_url)
-        payload = {
-            "referral_id": str(referral_id),
-            "linkedin_url": normalized_linkedin_url,
-            "message": req.message,
-            "referral_name": referral.name,
-            "user_name": user.full_name,
-            "callback_url": callback_url,
-            "callback_token": callback_token,
-        }
-
-        agent_url = req.agent_url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(f"{agent_url}/run-task", json=payload)
-                resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ExternalServiceError("Agent", f"Agent returned HTTP {e.response.status_code}")
-        except httpx.RequestError as e:
-            raise ExternalServiceError("Agent", f"Could not reach agent at {agent_url}: {e}")
-
-        logger.info("agent_task_queued referral_id=%s agent_url=%s", str(referral_id), agent_url)
-        return ConnectReferralResponse(queued=True, referral_id=referral_id)
-
-    async def handle_callback(
-        self, referral_id: uuid.UUID, req: AgentCallbackRequest
-    ) -> dict:
-        token_referral_id = verify_callback_token(req.token)
-        if token_referral_id != str(referral_id):
-            raise ForbiddenError("Callback token does not match referral")
-
-        referral = await self.repo.get_by_id(referral_id)
-        if referral is None:
-            raise NotFoundError("Referral", str(referral_id))
-
-        if req.state == "completed":
-            await self.repo.update(
-                referral,
-                status=ReferralStatus.REQUESTED,
-                asked_at=datetime.now(timezone.utc),
-            )
-            logger.info("agent_callback_completed referral_id=%s", str(referral_id))
-        else:
-            logger.warning(
-                "agent_callback_failed referral_id=%s error=%s",
-                str(referral_id), req.error,
-            )
-
-        return {"success": True, "state": req.state}

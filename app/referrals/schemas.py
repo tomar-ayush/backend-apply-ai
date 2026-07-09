@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, HttpUrl, field_validator, Field
+from pydantic import BaseModel, Field
 
 from app.referrals.models import ReferralStatus
 
