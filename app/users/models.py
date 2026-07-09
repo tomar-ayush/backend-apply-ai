@@ -45,6 +45,7 @@ class User(Base):
 
     # LLM configuration
     llm_provider: Mapped[Optional[str]] = mapped_column(String(50))
+    current_llm_model: Mapped[Optional[str]] = mapped_column(String(100))
     encrypted_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(

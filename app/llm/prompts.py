@@ -6,7 +6,16 @@ Your core objective is to analyze the unstructured job post and accurately map i
 3. Identify implicit technical keywords that would help an applicant surface in an ATS search index.
 4. Normalize the 'work_style' into the exact categorical value that fits best based on context cues."""
 
-JD_PARSE_USER = """Please analyze and extract the operational data from the following job posting text. Or I wont be able to eat tonight
+JD_PARSE_USER = """Analyze and extract the operational data from the following job posting text.
+
+Return ONLY a single valid JSON object (no markdown, no code fences) with exactly these keys:
+- "company": string (official company name)
+- "role": string (formal job title)
+- "workday_job_id": string or null (job posting id like R00XXXXX if present, else null)
+- "skills": object with "required" (list of strings) and "preferred" (list of strings)
+- "keywords": list of strings (ATS-relevant keywords/phrases)
+- "team_signals": object with "team_size" (string or null), "tech_stack" (list of strings), "work_style" (one of "remote"/"hybrid"/"onsite"/null), "industry" (string or null)
+- "llm_summary": string (2-3 sentence summary of distinctive responsibilities)
 
 --- START OF JOB DESCRIPTION ---
 {raw_text}

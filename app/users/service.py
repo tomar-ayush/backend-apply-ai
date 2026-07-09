@@ -46,6 +46,7 @@ class UserService:
             original_resume_pdf_url=user.original_resume_pdf_url,
             original_resume_latex_url=user.original_resume_latex_url,
             llm_provider=user.llm_provider,
+            current_llm_model=user.current_llm_model,
             has_llm_api_key=bool(user.encrypted_llm_api_key),
             created_at=user.created_at,
             updated_at=user.updated_at,

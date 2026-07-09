@@ -36,6 +36,7 @@ class UserProfile(BaseModel):
 
     # LLM config (keys never returned)
     llm_provider: Optional[str] = None
+    current_llm_model: Optional[str] = None
     has_llm_api_key: bool = False
 
     created_at: datetime
@@ -64,6 +65,7 @@ class UpdateUserRequest(BaseModel):
     education: Optional[Dict[str, Any]] = None
 
     llm_provider: Optional[str] = None
+    current_llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
 
     @field_validator("llm_provider")

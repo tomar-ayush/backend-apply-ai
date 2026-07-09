@@ -181,24 +181,37 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> Dict[str, Any]:
         """
-        Executes a completion run and enforces JSON deserialization validation.
+        Executes a completion and returns a validated dict.
+
+        - OpenAI / Anthropic / Gemini: use native structured outputs (response_schema)
+          for the highest-quality, strictly-typed parse.
+        - OpenRouter: does NOT support structured-output endpoints, so we fall back to
+          json_mode and pass the JD/schema requirements in the prompt; the result is
+          still validated against `response_schema`.
         """
+        # OpenRouter can't use the structured-output endpoints, and many of its
+        # underlying models (e.g. tencent/hy3 via Novita) reject the 'json_object'
+        # response format too. So for OpenRouter we send NO response_format and rely
+        # on the prompt demanding strict JSON, then validate against the schema.
+        use_structured = self.provider != "openrouter" and response_schema is not None
+        use_json_mode = self.provider != "openrouter"
+
         raw = await self.complete(
-            system=system, 
-            user=user, 
-            model=model, 
-            max_tokens=max_tokens, 
-            json_mode=True, 
-            response_schema=response_schema
+            system=system,
+            user=user,
+            model=model,
+            max_tokens=max_tokens,
+            json_mode=use_json_mode,
+            response_schema=response_schema if use_structured else None,
         )
         raw = raw.strip()
-        
-        # Clean up fallback code block wrappers safely if returned by a non-schema tier fallback
+
+        # Strip accidental markdown code fences if the model wraps the JSON.
         if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]        
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+
         try:
             if response_schema:
-                # Validates raw string structurally straight against the Pydantic data layout
                 validated_obj = response_schema.model_validate_json(raw)
                 return validated_obj.model_dump()
             return json.loads(raw)

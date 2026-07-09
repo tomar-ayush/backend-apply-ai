@@ -97,15 +97,22 @@ async def fetch_jd_html(url: str) -> tuple[str, str, dict]:
             raise ExternalServiceError("JD Fetch", str(e))
 
     html = response.text
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     # JSON-LD must be read before script tags are decomposed
     jsonld_text, extracted_meta = _extract_jsonld_meta(soup)
     og_text = _extract_og_description(soup)
 
-    for tag in soup(["script", "style", "nav", "footer", "header"]):
+    # Natural full-text extraction: strip non-content tags, keep everything else.
+    # Robust across Workday SPAs, LinkedIn, and classic job boards.
+    text_soup = BeautifulSoup(html, "html.parser")
+    for tag in text_soup(["script", "style", "header", "footer", "nav"]):
         tag.decompose()
+    visible_text = "\n".join(
+        ln.strip() for ln in text_soup.get_text(separator="\n").splitlines() if ln.strip()
+    )
 
+    # Priority: JSON-LD > og:description > visible text > raw HTML (last resort)
     if jsonld_text:
         logger.info("jd_source=jsonld extracted_meta_keys=%s", list(extracted_meta.keys()))
         return html, jsonld_text, extracted_meta
@@ -114,9 +121,13 @@ async def fetch_jd_html(url: str) -> tuple[str, str, dict]:
         logger.info("jd_source=og_description")
         return html, og_text, {}
 
-    # Last resort: visible text (works for non-SPA job boards)
-    lines = [ln.strip() for ln in soup.get_text(separator="\n").splitlines() if ln.strip()]
-    return html, "\n".join(lines), {}
+    if visible_text:
+        logger.info("jd_source=visible_text len=%d", len(visible_text))
+        return html, visible_text, {}
+
+    # Last resort: return the script-stripped HTML so the LLM still has page content.
+    logger.warning("jd_source=raw_html_fallback url=%s", url)
+    return html, text_soup.prettify(), {}
 
 
 class JobJDService:
@@ -159,7 +170,9 @@ class JobJDService:
         logger.info("prompt len: %s", len(prompt))
 
         logger.info("jd_llm_parse_start job_id=%s", str(job_id))
-        parsed = await llm.complete_json(system=JD_PARSE_SYSTEM, user=prompt, model=None, response_schema=JobParseSchema)
+        parsed = await llm.complete_json(
+            system=JD_PARSE_SYSTEM, user=prompt, model=user.current_llm_model, response_schema=JobParseSchema
+        )
 
         logger.info("llm response: %s", parsed)
 

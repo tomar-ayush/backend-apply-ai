@@ -32,6 +32,7 @@ def make_user(**kwargs):
         ai_resume_latex_url=None,
         # LLM config
         llm_provider="openai",
+        current_llm_model=None,
         encrypted_llm_api_key=None,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),

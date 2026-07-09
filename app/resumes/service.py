@@ -128,7 +128,7 @@ class ResumeService:
         )
 
         logger.info("ai_resume_generate_start job_id=%s user_id=%s", str(job_id), str(user.id))
-        optimized_latex = await llm.complete(system=RESUME_SUMMARY_OPTIMIZE_SYSTEM, user=prompt)
+        optimized_latex = await llm.complete(system=RESUME_SUMMARY_OPTIMIZE_SYSTEM, user=prompt, model=user.current_llm_model)
 
         validated = _validate_latex(optimized_latex)
         if not validated:
