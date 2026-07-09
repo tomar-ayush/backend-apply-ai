@@ -2,15 +2,13 @@ import uuid
 from app.common.logging import get_logger
 from typing import Optional
 
-from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.users.models import User
 from app.users.repository import UserRepository
-from app.users.schemas import UserProfile, UpdateUserRequest, ResumeUploadResponse
+from app.users.schemas import UserProfile, UpdateUserRequest
 from app.common.security import encrypt, decrypt
 from app.common.exceptions import NotFoundError
-from app.storage.r2 import r2_storage
 
 logger = get_logger(__name__)
 
@@ -68,45 +66,6 @@ class UserService:
 
         updated = await self.repo.update(user, **updates)
         return self._to_profile(updated)
-
-    async def upload_resume(
-        self,
-        user: User,
-        pdf_file: Optional[UploadFile],
-        latex_file: Optional[UploadFile],
-    ) -> ResumeUploadResponse:
-        updates = {}
-        pdf_url = None
-        latex_url = None
-
-        if pdf_file:
-            data = await pdf_file.read()
-            key = f"users/{user.id}/original_resume.pdf"
-            pdf_url = r2_storage.upload_bytes(key, data, "application/pdf")
-            updates["original_resume_pdf_url"] = pdf_url
-
-        if latex_file:
-            data = await latex_file.read()
-            key = f"users/{user.id}/original_resume.tex"
-            latex_url = r2_storage.upload_bytes(key, data, "text/x-tex")
-            updates["original_resume_latex_url"] = latex_url
-
-        if updates:
-            await self.repo.update(user, **updates)
-
-        logger.info("resume_uploaded user_id=%s has_pdf=%s has_latex=%s", str(user.id), bool(pdf_url), bool(latex_url))
-        return ResumeUploadResponse(
-            pdf_url=pdf_url,
-            latex_url=latex_url,
-            message="Resume uploaded successfully",
-        )
-
-    async def get_resume(self, user: User) -> ResumeUploadResponse:
-        return ResumeUploadResponse(
-            pdf_url=user.original_resume_pdf_url,
-            latex_url=user.original_resume_latex_url,
-            message="Original resume",
-        )
 
     def get_decrypted_llm_key(self, user: User) -> Optional[str]:
         if not user.encrypted_llm_api_key:

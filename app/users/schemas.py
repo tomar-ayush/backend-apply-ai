@@ -4,7 +4,7 @@ from typing import Optional, Any, Dict, Literal
 
 from pydantic import BaseModel, EmailStr, field_validator
 
-SUPPORTED_LLM_PROVIDERS = {"openai", "anthropic", "claude", "gemini", "google"}
+SUPPORTED_LLM_PROVIDERS = {"openai", "anthropic", "claude", "gemini", "google", "openrouter"}
 
 
 class UserProfile(BaseModel):
@@ -78,9 +78,3 @@ class UpdateUserRequest(BaseModel):
                 f"llm_provider must be one of: {', '.join(sorted(SUPPORTED_LLM_PROVIDERS))}"
             )
         return v.lower() if v else v
-
-
-class ResumeUploadResponse(BaseModel):
-    pdf_url: Optional[str] = None
-    latex_url: Optional[str] = None
-    message: str

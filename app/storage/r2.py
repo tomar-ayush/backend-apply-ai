@@ -72,5 +72,37 @@ class R2Storage:
         except (BotoCoreError, ClientError) as e:
             logger.error("r2_delete_error key=%s error=%s", key, str(e))
 
+    def generate_presigned_put_url(
+        self, key: str, content_type: str = "text/x-tex", expires_in: int = 900
+    ) -> str:
+        """Return a presigned PUT URL the client can use to upload a file directly to R2."""
+        try:
+            client = self._get_client()
+            return client.generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": settings.R2_BUCKET_NAME,
+                    "Key": key,
+                    "ContentType": content_type,
+                },
+                ExpiresIn=expires_in,
+            )
+        except (BotoCoreError, ClientError) as e:
+            logger.error("r2_presign_put_error key=%s error=%s", key, str(e))
+            raise ExternalServiceError("R2", str(e))
+
+    def generate_presigned_get_url(self, key: str, expires_in: int = 900) -> str:
+        """Return a presigned GET URL the client can use to download a file from R2."""
+        try:
+            client = self._get_client()
+            return client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": settings.R2_BUCKET_NAME, "Key": key},
+                ExpiresIn=expires_in,
+            )
+        except (BotoCoreError, ClientError) as e:
+            logger.error("r2_presign_get_error key=%s error=%s", key, str(e))
+            raise ExternalServiceError("R2", str(e))
+
 
 r2_storage = R2Storage()

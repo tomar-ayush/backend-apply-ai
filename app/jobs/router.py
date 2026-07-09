@@ -14,8 +14,6 @@ from app.job_jd.schemas import JobJDResponse
 from app.job_jd.service import JobJDService
 from app.referrals.schemas import GenerateReferralsResponse, ReferralResponse
 from app.referrals.service import ReferralService
-from app.resumes.schemas import GenerateResumeResponse, SelectResumeRequest, ResumeResponse
-from app.resumes.service import ResumeService
 
 router = APIRouter()
 
@@ -135,37 +133,3 @@ async def list_referrals(
     await JobService(db).get(job_id, current_user)
     referrals = await ReferralService(db).list_by_job(job_id)
     return referrals
-
-
-# --- Resume routes ---
-
-@router.post("/{job_id}/resume/generate", response_model=GenerateResumeResponse)
-async def generate_resume(
-    job_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    job = await JobService(db).get(job_id, current_user)
-    return await ResumeService(db).generate(job, current_user)
-
-
-@router.get("/{job_id}/resume", response_model=ResumeResponse)
-async def get_resume(
-    job_id: uuid.UUID,
-    version: str = Query("optimized"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    job = await JobService(db).get(job_id, current_user)
-    return await ResumeService(db).get(job, version)
-
-
-@router.post("/{job_id}/resume/select", response_model=ResumeResponse)
-async def select_resume(
-    job_id: uuid.UUID,
-    req: SelectResumeRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    job = await JobService(db).get(job_id, current_user)
-    return await ResumeService(db).get(job, req.version)
