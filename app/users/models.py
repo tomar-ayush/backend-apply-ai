@@ -38,14 +38,12 @@ class User(Base):
     education: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Resume storage (Cloudflare R2 keys)
-    original_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
     original_resume_latex_url: Mapped[Optional[str]] = mapped_column(Text)
+    ai_resume_latex_url: Mapped[Optional[str]] = mapped_column(Text)
 
     # LLM configuration
     llm_provider: Mapped[Optional[str]] = mapped_column(String(50))
     encrypted_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
-    encrypted_google_search_api_key: Mapped[Optional[str]] = mapped_column(Text)
-    google_search_engine_id: Mapped[Optional[str]] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
