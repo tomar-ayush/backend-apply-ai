@@ -40,6 +40,8 @@ class User(Base):
     # Resume storage (Cloudflare R2 keys)
     original_resume_latex_url: Mapped[Optional[str]] = mapped_column(Text)
     ai_resume_latex_url: Mapped[Optional[str]] = mapped_column(Text)
+    original_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
+    ai_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
 
     # LLM configuration
     llm_provider: Mapped[Optional[str]] = mapped_column(String(50))

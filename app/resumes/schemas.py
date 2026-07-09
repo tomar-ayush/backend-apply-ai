@@ -4,20 +4,19 @@ from pydantic import BaseModel
 
 
 class CreateResumeUploadUrlsResponse(BaseModel):
-    """Presigned URL for the client to upload a resume copy directly to R2."""
-    presigned_url: str
+    """Presigned PUT URL for the client to upload the LaTeX source of a resume copy."""
+    latex_presigned_url: str
 
 
 class GenerateAiResumeResponse(BaseModel):
     """Result of generating the AI-optimized resume for a job."""
-    download_url: str                    # presigned GET URL for the client to fetch it
-    validated: bool                      # passed pylatexenc validation
+    download_url: Optional[str]            # presigned GET URL for the compiled PDF (None if compile failed)
+    validated: bool                        # passed pylatexenc validation
 
 
 class GetResumeDownloadResponse(BaseModel):
-    """Presigned download URL for a stored resume copy."""
+    """Presigned download URL for a stored resume copy (PDF only)."""
     version: Literal["original", "ai"]
-    latex_url: Optional[str] = None
-    download_url: Optional[str] = None   # presigned GET URL (None if not uploaded yet)
+    download_url: Optional[str] = None     # presigned GET URL for the PDF (None if not compiled yet)
     message: str
 

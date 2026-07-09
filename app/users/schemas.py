@@ -37,8 +37,6 @@ class UserProfile(BaseModel):
     # LLM config (keys never returned)
     llm_provider: Optional[str] = None
     has_llm_api_key: bool = False
-    has_google_search_api_key: bool = False
-    google_search_engine_id: Optional[str] = None
 
     created_at: datetime
     updated_at: datetime
@@ -67,8 +65,6 @@ class UpdateUserRequest(BaseModel):
 
     llm_provider: Optional[str] = None
     llm_api_key: Optional[str] = None
-    google_search_api_key: Optional[str] = None
-    google_search_engine_id: Optional[str] = None
 
     @field_validator("llm_provider")
     @classmethod

@@ -17,14 +17,16 @@ from app.resumes.schemas import (
 router = APIRouter()
 
 
-@router.post("/upload-url/{resume_type}", response_model=CreateResumeUploadUrlsResponse, status_code=201)
+@router.post("/upload-url", response_model=CreateResumeUploadUrlsResponse, status_code=201)
 async def create_resume_upload_url(
-    resume_type: Literal["original", "ai"],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return a presigned PUT URL so the client uploads the requested resume copy to R2."""
-    return await ResumeService(db).create_upload_url(resume_type, current_user)
+    """Return a presigned PUT URL so the client uploads the ORIGINAL resume LaTeX to R2.
+
+    Only the original resume is uploaded by the user; the AI resume is generated server-side.
+    """
+    return await ResumeService(db).create_upload_url(current_user)
 
 
 @router.post("/generate/{job_id}", response_model=GenerateAiResumeResponse, status_code=201)
@@ -35,6 +37,20 @@ async def generate_ai_resume(
 ):
     """Generate an ATS-friendly AI resume for a job, validate, upload, return a download URL."""
     return await ResumeService(db).generate_ai(job_id, current_user)
+
+
+@router.post("/finalize/{resume_type}", response_model=GetResumeDownloadResponse, status_code=201)
+async def finalize_resume(
+    resume_type: Literal["original"],
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compile the just-uploaded ORIGINAL LaTeX to PDF and return the PDF download URL.
+
+    Call this after the client PUTs the LaTeX to the presigned URL from /upload-url.
+    (The AI resume is compiled automatically during /generate, so this is original-only.)
+    """
+    return await ResumeService(db).finalize_resume(resume_type, current_user)
 
 
 @router.get("/download/{version}", response_model=GetResumeDownloadResponse)

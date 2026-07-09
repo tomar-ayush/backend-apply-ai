@@ -47,8 +47,6 @@ class UserService:
             original_resume_latex_url=user.original_resume_latex_url,
             llm_provider=user.llm_provider,
             has_llm_api_key=bool(user.encrypted_llm_api_key),
-            has_google_search_api_key=bool(user.encrypted_google_search_api_key),
-            google_search_engine_id=user.google_search_engine_id,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -57,12 +55,10 @@ class UserService:
         return self._to_profile(user)
 
     async def update_me(self, user: User, req: UpdateUserRequest) -> UserProfile:
-        updates = req.model_dump(exclude_none=True, exclude={"llm_api_key", "google_search_api_key"})
+        updates = req.model_dump(exclude_none=True, exclude={"llm_api_key"})
 
         if req.llm_api_key is not None:
             updates["encrypted_llm_api_key"] = encrypt(req.llm_api_key)
-        if req.google_search_api_key is not None:
-            updates["encrypted_google_search_api_key"] = encrypt(req.google_search_api_key)
 
         updated = await self.repo.update(user, **updates)
         return self._to_profile(updated)
@@ -71,8 +67,3 @@ class UserService:
         if not user.encrypted_llm_api_key:
             return None
         return decrypt(user.encrypted_llm_api_key)
-
-    def get_decrypted_google_key(self, user: User) -> Optional[str]:
-        if not user.encrypted_google_search_api_key:
-            return None
-        return decrypt(user.encrypted_google_search_api_key)

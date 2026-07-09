@@ -33,8 +33,6 @@ def make_user(**kwargs):
         # LLM config
         llm_provider="openai",
         encrypted_llm_api_key=None,
-        encrypted_google_search_api_key=None,
-        google_search_engine_id=None,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

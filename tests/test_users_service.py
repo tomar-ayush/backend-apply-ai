@@ -64,9 +64,3 @@ def test_get_decrypted_llm_key_returns_none_when_not_set():
     user = make_user(encrypted_llm_api_key=None)
     svc = UserService(db=None)
     assert svc.get_decrypted_llm_key(user) is None
-
-
-def test_get_decrypted_google_key_returns_none_when_not_set():
-    user = make_user(encrypted_google_search_api_key=None)
-    svc = UserService(db=None)
-    assert svc.get_decrypted_google_key(user) is None

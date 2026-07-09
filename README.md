@@ -238,9 +238,7 @@ Before using JD parsing, referrals, or resume optimization, set your LLM credent
 PATCH /users/me
 {
   "llm_provider": "openai",           # or "anthropic"
-  "llm_api_key": "sk-...",            # stored encrypted
-  "google_search_api_key": "...",     # for referral search
-  "google_search_engine_id": "..."    # Google CSE ID
+  "llm_api_key": "sk-..."             # stored encrypted
 }
 ```
 

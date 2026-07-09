@@ -1,4 +1,7 @@
 import uuid
+import httpx
+from typing import Optional
+
 from app.common.logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +20,7 @@ from app.common.exceptions import BadRequestError, NotFoundError
 logger = get_logger(__name__)
 
 RESUME_TEX_CONTENT_TYPE = "text/x-tex"
+RESUME_PDF_CONTENT_TYPE = "application/pdf"
 PRESIGN_EXPIRY_SECONDS = 900
 
 
@@ -31,27 +35,64 @@ class ResumeService:
     # ------------------------------------------------------------------
 
     def _resume_key(self, user_id: uuid.UUID, kind: str) -> str:
-        """kind is 'original' or 'ai'. Stores LaTeX only; client converts to PDF."""
+        """kind is 'original' or 'ai'. LaTeX source stored here."""
         return f"resume/{user_id}/{kind}_resume.tex"
 
-    async def create_upload_url(self, resume_type: str, user: User) -> CreateResumeUploadUrlsResponse:
-        """Mint a presigned PUT URL so the client uploads one resume copy to R2 directly.
+    def _resume_pdf_key(self, user_id: uuid.UUID, kind: str) -> str:
+        """Matching PDF, same naming convention with a _pdf postfix."""
+        return f"resume/{user_id}/{kind}_resume_pdf.pdf"
 
-        The client specifies which copy ('original' or 'ai'); the canonical final URL
-        is recorded on the user immediately since the key is deterministic.
+    async def create_upload_url(self, user: User) -> CreateResumeUploadUrlsResponse:
+        """Mint a presigned PUT URL so the client uploads the LaTeX source of one resume copy.
+
+        The client uploads LaTeX only; the server compiles it to PDF (see finalize_resume)
+        and stores both. The canonical LaTeX URL is recorded immediately since the key
+        is deterministic.
         """
-        key = self._resume_key(user.id, resume_type)
+        key = self._resume_key(user.id, "original")
         presigned_url = r2_storage.generate_presigned_put_url(key, RESUME_TEX_CONTENT_TYPE, PRESIGN_EXPIRY_SECONDS)
-        final_url = r2_storage._public_url(key)
+        final = r2_storage._public_url(key)
 
         user_repo = UserRepository(self.db)
-        if resume_type == "ai":
-            await user_repo.update(user, ai_resume_latex_url=final_url)
-        else:
-            await user_repo.update(user, original_resume_latex_url=final_url)
+        await user_repo.update(user, original_resume_latex_url=final)
 
-        logger.info("resume_upload_url_created user_id=%s type=%s", str(user.id), resume_type)
-        return CreateResumeUploadUrlsResponse(presigned_url=presigned_url)
+        logger.info("resume_upload_url_created user_id=%s type=%s", str(user.id), "original")
+        return CreateResumeUploadUrlsResponse(latex_presigned_url=presigned_url)
+
+    async def finalize_resume(self, resume_type: str, user: User) -> GetResumeDownloadResponse:
+        """Compile the just-uploaded LaTeX to PDF via latexonline.cc and store it.
+
+        Call this after the client PUTs the LaTeX to the presigned URL. Returns the PDF
+        download URL. If compilation fails, the PDF URL is None but the LaTeX is kept.
+        """
+        kind = resume_type
+        latex_key = self._resume_key(user.id, kind)
+        latex_text = r2_storage.download_text(latex_key)
+
+        pdf_url = None
+        pdf_bytes = await _compile_latex_to_pdf_via_api(latex_text)
+        if pdf_bytes:
+            pdf_key = self._resume_pdf_key(user.id, kind)
+            pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
+        else:
+            logger.warning("resume_pdf_compile_failed type=%s user_id=%s", kind, str(user.id))
+
+        user_repo = UserRepository(self.db)
+        await user_repo.update(user, original_resume_pdf_url=pdf_url)
+
+        download_url = (
+            r2_storage.generate_presigned_get_url(r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS)
+            if pdf_url else None
+        )
+        logger.info("resume_finalized type=%s has_pdf=%s", kind, bool(pdf_url))
+        return GetResumeDownloadResponse(
+            version=kind,
+            download_url=download_url,
+            message=(
+                f"{kind} resume compiled to PDF" if pdf_url
+                else f"{kind} LaTeX uploaded but PDF compilation failed"
+            ),
+        )
 
     async def generate_ai(self, job_id: uuid.UUID, user: User) -> GenerateAiResumeResponse:
         """Generate an ATS-friendly AI resume for a job, validate, upload, return a download URL.
@@ -95,39 +136,48 @@ class ResumeService:
 
         ai_key = self._resume_key(user.id, "ai")
         latex_url = r2_storage.upload_text(ai_key, optimized_latex, RESUME_TEX_CONTENT_TYPE)
-        download_url = r2_storage.generate_presigned_get_url(ai_key, PRESIGN_EXPIRY_SECONDS)
+
+        # Compile the optimized LaTeX to PDF via latexonline.cc and store it too.
+        pdf_url = None
+        pdf_bytes = await _compile_latex_to_pdf_via_api(optimized_latex)
+        if pdf_bytes:
+            pdf_key = self._resume_pdf_key(user.id, "ai")
+            pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
+        else:
+            logger.warning("ai_resume_pdf_compile_failed job_id=%s", str(job_id))
 
         user_repo = UserRepository(self.db)
-        await user_repo.update(user, ai_resume_latex_url=latex_url)
+        await user_repo.update(user, ai_resume_latex_url=latex_url, ai_resume_pdf_url=pdf_url)
 
-        logger.info("ai_resume_generated job_id=%s validated=%s", str(job_id), validated)
+        download_url = (
+            r2_storage.generate_presigned_get_url(r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS)
+            if pdf_url else None
+        )
+        logger.info("ai_resume_generated job_id=%s validated=%s has_pdf=%s", str(job_id), validated, bool(pdf_url))
         return GenerateAiResumeResponse(
             download_url=download_url,
             validated=validated,
         )
 
     async def get_download_url(self, user: User, version: str) -> GetResumeDownloadResponse:
-        """Return a presigned GET URL for a stored resume copy (original or ai)."""
+        """Return the presigned GET URL for the compiled PDF of a stored resume copy."""
         if version == "ai":
-            latex_url = user.ai_resume_latex_url
+            pdf_url = user.ai_resume_pdf_url
         else:
-            latex_url = user.original_resume_latex_url
+            pdf_url = user.original_resume_pdf_url
 
-        if not latex_url:
+        if not pdf_url:
             return GetResumeDownloadResponse(
                 version=version,
-                latex_url=None,
                 download_url=None,
-                message=f"No {version} resume uploaded yet",
+                message=f"No {version} resume PDF compiled yet",
             )
 
-        key = r2_storage.key_from_url(latex_url)
-        download_url = r2_storage.generate_presigned_get_url(key, PRESIGN_EXPIRY_SECONDS)
+        download_url = r2_storage.generate_presigned_get_url(r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS)
         return GetResumeDownloadResponse(
             version=version,
-            latex_url=latex_url,
             download_url=download_url,
-            message=f"Use the download_url to fetch the {version} resume .tex",
+            message=f"Use the download_url to fetch the {version} resume PDF",
         )
 
 
@@ -141,3 +191,23 @@ def _validate_latex(content: str) -> bool:
     except Exception as e:
         logger.warning("latex_validation_error error=%s", str(e))
         return False
+
+
+async def _compile_latex_to_pdf_via_api(latex: str) -> Optional[bytes]:
+    """Compile LaTeX to PDF using the latexonline.cc API (xelatex engine).
+
+    Uses POST with form fields (not a URL-encoded GET) so long resumes don't blow
+    past URL-length limits. Returns raw PDF bytes, or None if compilation fails.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://latexonline.cc/compile",
+                data={"text": latex, "command": "xelatex"},
+            )
+        if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+            return resp.content
+        logger.warning("latexonline_compile_failed status=%s", resp.status_code)
+    except Exception as e:
+        logger.warning("latexonline_error error=%s", str(e))
+    return None
