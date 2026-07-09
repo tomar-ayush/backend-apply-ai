@@ -6,7 +6,7 @@ from app.referrals.models import ReferralStatus
 from app.referrals.schemas import UpdateReferralRequest
 from app.referrals.service import ReferralService
 from app.common.exceptions import InvalidTransitionError, NotFoundError
-from tests.conftest import make_user, make_referral
+from tests.conftest import make_user, make_referral, make_job
 
 
 def test_valid_referral_transitions():
@@ -38,10 +38,14 @@ async def test_update_referral_invalid_transition():
     db = AsyncMock()
     user = make_user()
     referral = make_referral(status=ReferralStatus.DECLINED)
-    with patch("app.referrals.service.ReferralRepository") as MockRepo:
+    with patch("app.referrals.service.ReferralRepository") as MockRepo, \
+         patch("app.referrals.service.JobRepository") as MockJobRepo:
         mock_repo = AsyncMock()
         mock_repo.get_by_id = AsyncMock(return_value=referral)
         MockRepo.return_value = mock_repo
+        mock_job_repo = AsyncMock()
+        mock_job_repo.get_by_id = AsyncMock(return_value=make_job(user_id=user.id))
+        MockJobRepo.return_value = mock_job_repo
         svc = ReferralService(db)
         req = UpdateReferralRequest(status=ReferralStatus.REQUESTED)
         with pytest.raises(InvalidTransitionError):
@@ -54,11 +58,15 @@ async def test_update_referral_sets_asked_at():
     user = make_user()
     referral = make_referral(status=ReferralStatus.NOT_CONTACTED)
     updated = make_referral(status=ReferralStatus.REQUESTED)
-    with patch("app.referrals.service.ReferralRepository") as MockRepo:
+    with patch("app.referrals.service.ReferralRepository") as MockRepo, \
+         patch("app.referrals.service.JobRepository") as MockJobRepo:
         mock_repo = AsyncMock()
         mock_repo.get_by_id = AsyncMock(return_value=referral)
         mock_repo.update = AsyncMock(return_value=updated)
         MockRepo.return_value = mock_repo
+        mock_job_repo = AsyncMock()
+        mock_job_repo.get_by_id = AsyncMock(return_value=make_job(user_id=user.id))
+        MockJobRepo.return_value = mock_job_repo
         svc = ReferralService(db)
         req = UpdateReferralRequest(status=ReferralStatus.REQUESTED)
         await svc.update(referral.id, req, user)

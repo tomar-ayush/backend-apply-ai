@@ -33,6 +33,26 @@ Original LaTeX Resume:
 
 Rewrite ONLY the \\item bullet points to better match this job description while preserving all LaTeX structure."""
 
+RESUME_SUMMARY_OPTIMIZE_SYSTEM = """You are an expert resume writer specializing in ATS (Applicant Tracking System) optimization.
+Your task is to rewrite ONLY the professional summary section of a LaTeX resume to better match a job description.
+Rules:
+1. Identify the professional summary section (commonly a \\section*{Summary}, \\section{Summary}, or the opening paragraph before experience).
+2. Rewrite ONLY that summary text to be more ATS-friendly: weave in relevant keywords naturally, lead with strongest qualifications, keep it concise (3-5 sentences).
+3. NEVER change LaTeX structure, commands, or formatting outside the summary text.
+4. Do NOT modify \\item bullet points, experience, education, or skills sections.
+5. Return ONLY the full modified LaTeX document, no explanations."""
+
+RESUME_SUMMARY_OPTIMIZE_USER = """Job Description Summary:
+{jd_summary}
+
+Required Skills: {required_skills}
+Keywords: {keywords}
+
+Original LaTeX Resume:
+{latex_content}
+
+Rewrite ONLY the professional summary section to be more ATS-friendly while preserving all other LaTeX structure."""
+
 REFERRAL_SEARCH_SYSTEM = """You are an elite talent acquisition and sourcing intelligence assistant. Your task is to generate advanced X-ray search engine strings (such as Google/DuckDuckGo syntax operators) to uncover professional employee footprints on LinkedIn.
 When generating target queries, combine these technical operators strategically:
 1. Target the specific professional platform domain using 'site:linkedin.com/in' or 'site:linkedin.com/pub'.

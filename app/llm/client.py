@@ -13,7 +13,11 @@ PROVIDER_ALIASES = {
     "claude": "anthropic",
     "gemini": "gemini",
     "google": "gemini",
+    "openrouter": "openrouter",
 }
+
+# OpenRouter is OpenAI-compatible; route it through the OpenAI client with this base URL.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class LLMClient:
@@ -22,7 +26,7 @@ class LLMClient:
         if self.provider is None:
             raise BadRequestError(
                 f"Unsupported LLM provider: '{provider}'. "
-                f"Supported: openai, anthropic, gemini"
+                f"Supported: openai, anthropic, gemini, openrouter"
             )
         self.api_key = api_key
         self._client = self._build_client()
@@ -49,6 +53,16 @@ class LLMClient:
             except ImportError:
                 raise BadRequestError("google-genai package not installed")
 
+        if self.provider == "openrouter":
+            try:
+                from openai import AsyncOpenAI
+                return AsyncOpenAI(
+                    api_key=self.api_key,
+                    base_url=OPENROUTER_BASE_URL,
+                )
+            except ImportError:
+                raise BadRequestError("openai package not installed")
+
     async def complete(
         self,
         system: str,
@@ -69,6 +83,13 @@ class LLMClient:
                 return await self._anthropic_complete(system, user, model, max_tokens, response_schema)
             if self.provider == "gemini":
                 return await self._gemini_complete(system, user, model, max_tokens, json_mode, response_schema)
+            if self.provider == "openrouter":
+                if not model:
+                    raise BadRequestError(
+                        "OpenRouter requires an explicit model name (e.g. 'openai/gpt-4o-mini'). "
+                        "Provide it from the UI."
+                    )
+                return await self._openai_complete(system, user, model, max_tokens, json_mode, response_schema)
         except (ExternalServiceError, BadRequestError):
             raise
         except Exception as e:
