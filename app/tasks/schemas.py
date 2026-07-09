@@ -51,7 +51,7 @@ class TriggerWorkdayResponse(BaseModel):
 
 class WorkdayCallbackRequest(BaseModel):
     """Posted back by the worker once the automation finishes."""
-    state: stateEnum  # "completed" | "failed"
+    state: stateEnum
     error: Optional[str] = None
     token: str
 
@@ -70,6 +70,7 @@ class TriggerLinkedinResponse(BaseModel):
 
 class LinkedinCallbackRequest(BaseModel):
     """Posted back by the LinkedIn agent once the connect attempt finishes."""
-    state: stateEnum  # "completed" | "failed"
+    state: stateEnum
+    task_id: Optional[str] = None
     error: Optional[str] = None
     token: str

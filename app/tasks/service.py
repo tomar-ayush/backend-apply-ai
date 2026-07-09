@@ -186,6 +186,7 @@ class TaskService:
         normalized_linkedin_url = _normalize_linkedin_url(req.linkedin_url)
         payload = {
             "referral_id": str(referral_id),
+            "task_id": str(task.id),
             "linkedin_url": normalized_linkedin_url,
             "message": req.message,
             "referral_name": referral.name,
@@ -218,8 +219,15 @@ class TaskService:
         referral = await self.referral_repo.get_by_id(referral_id)
         if referral is None:
             raise NotFoundError("Referral", str(referral_id))
+        
+        task = await self.repo.get_by_id(req.task_id)
+        if task is None:
+            raise NotFoundError("Task", str(req.task_id))
 
         if req.state == "completed":
+            
+            await self.repo.update(task, status=TaskStatus.COMPLETED)
+
             await self.referral_repo.update(
                 referral,
                 status=ReferralStatus.REQUESTED,
