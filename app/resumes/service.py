@@ -1,4 +1,6 @@
 import uuid
+import asyncio
+import base64
 import httpx
 from typing import Optional
 
@@ -6,6 +8,7 @@ from app.common.logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.jobs.repository import JobRepository
 from app.job_jd.repository import JobJDRepository
 from app.users.models import User
@@ -137,7 +140,7 @@ class ResumeService:
         ai_key = self._resume_key(user.id, "ai")
         latex_url = r2_storage.upload_text(ai_key, optimized_latex, RESUME_TEX_CONTENT_TYPE)
 
-        # Compile the optimized LaTeX to PDF via latexonline.cc and store it too.
+        # Compile the optimized LaTeX to PDF via the Lambda compiler and store it too.
         pdf_url = None
         pdf_bytes = await _compile_latex_to_pdf_via_api(optimized_latex)
         if pdf_bytes:
@@ -193,21 +196,56 @@ def _validate_latex(content: str) -> bool:
         return False
 
 
-async def _compile_latex_to_pdf_via_api(latex: str) -> Optional[bytes]:
-    """Compile LaTeX to PDF using the latexonline.cc API (xelatex engine).
+async def _compile_latex_to_pdf_via_api(latex: str, max_retries: int = 2) -> Optional[bytes]:
+    """Compile LaTeX to PDF via the self-hosted AWS Lambda (TeXLive) compiler.
 
-    Uses POST with form fields (not a URL-encoded GET) so long resumes don't blow
-    past URL-length limits. Returns raw PDF bytes, or None if compilation fails.
+    POSTs the .tex as JSON `{"latex_base64": "<base64 source>"}` (matches the Lambda
+    handler's `latex_base64` branch — safest for backslash-heavy source). On success
+    the Lambda returns a JSON envelope: statusCode 200, `isBase64Encoded: true`,
+    `body` = base64 PDF. On failure it returns 422 with a JSON body containing the
+    LaTeX log tail. Retries up to `max_retries` times with a short backoff. Returns
+    raw PDF bytes, or None if every attempt fails.
     """
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "https://latexonline.cc/compile",
-                data={"text": latex, "command": "xelatex"},
+    url = settings.LATEX_COMPILE_URL
+    if not url:
+        logger.error("latex_compile_no_url LATEX_COMPILE_URL is not configured")
+        return None
+
+    payload = {"latex_base64": base64.b64encode(latex.encode("utf-8")).decode("utf-8")}
+    logger.info("latex_compile_start url_set=%s latex_len=%d retries=%d", bool(url), len(latex), max_retries)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
+                resp = await client.post(url, json=payload)
+            logger.info(
+                "latex_compile_attempt attempt=%d/%d status=%d ctype=%s",
+                attempt, max_retries, resp.status_code, resp.headers.get("content-type"),
             )
-        if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
-            return resp.content
-        logger.warning("latexonline_compile_failed status=%s", resp.status_code)
-    except Exception as e:
-        logger.warning("latexonline_error error=%s", str(e))
+
+            if resp.status_code == 200:
+                body = resp.json()
+                if body.get("isBase64Encoded") and body.get("body"):
+                    pdf = base64.b64decode(body["body"])
+                    if pdf.startswith(b"%PDF"):
+                        logger.info("latex_compile_ok attempt=%d/%d bytes=%d", attempt, max_retries, len(pdf))
+                        return pdf
+                    logger.warning("latex_compile_bad_pdf attempt=%d head=%s", attempt, pdf[:40])
+                    return None
+                logger.warning("latex_compile_bad_response attempt=%d keys=%s", attempt, list(body.keys()))
+                return None
+
+            # 422 etc: surface the log tail so callers can debug missing packages.
+            try:
+                detail = resp.json()
+                logger.warning("latex_compile_failed attempt=%d status=%d detail=%s", attempt, resp.status_code, detail)
+            except Exception:
+                logger.warning("latex_compile_failed attempt=%d status=%d body=%s", attempt, resp.status_code, resp.text[:500])
+        except Exception as e:
+            logger.warning("latex_compile_error attempt=%d error=%s", attempt, str(e))
+
+        if attempt < max_retries:
+            await asyncio.sleep(1 * attempt)
+
+    logger.error("latex_compile_all_failed")
     return None
