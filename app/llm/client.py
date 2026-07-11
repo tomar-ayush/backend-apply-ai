@@ -178,7 +178,8 @@ class LLMClient:
         user: str,
         model: Optional[str] = None,
         response_schema: Optional[Type[BaseModel]] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
+        max_retries: int = 2,
     ) -> Dict[str, Any]:
         """
         Executes a completion and returns a validated dict.
@@ -188,6 +189,10 @@ class LLMClient:
         - OpenRouter: does NOT support structured-output endpoints, so we fall back to
           json_mode and pass the JD/schema requirements in the prompt; the result is
           still validated against `response_schema`.
+
+        Retries up to `max_retries` times if the model returns truncated/invalid JSON
+        (common when a large JD hits the token cap). On retry we ask the model to
+        continue/repair the previous output instead of starting over.
         """
         # OpenRouter can't use the structured-output endpoints, and many of its
         # underlying models (e.g. tencent/hy3 via Novita) reject the 'json_object'
@@ -216,5 +221,26 @@ class LLMClient:
                 return validated_obj.model_dump()
             return json.loads(raw)
         except (json.JSONDecodeError, ValidationError) as e:
-            logger.error("llm_json_parse_error provider=%s raw=%s error=%s", self.provider, raw[:200], str(e))
-            raise ExternalServiceError("LLM", f"Response was not structurally valid: {str(e)}")
+            if max_retries <= 0:
+                logger.error("llm_json_parse_error provider=%s raw=%s error=%s", self.provider, raw[:200], str(e))
+                raise ExternalServiceError("LLM", f"Response was not structurally valid: {str(e)}")
+
+            # Likely truncated (hit token cap). Ask the model to continue the JSON.
+            logger.warning(
+                "llm_json_parse_retry provider=%s attempt_left=%d error=%s",
+                self.provider, max_retries, str(e),
+            )
+            repair_user = (
+                "The previous response was cut off and is not valid JSON. "
+                "Continue and complete the SAME JSON object exactly where it stopped, "
+                "output ONLY the remaining JSON (no commentary, no markdown):\n\n"
+                + raw
+            )
+            return await self.complete_json(
+                system=system,
+                user=repair_user,
+                model=model,
+                response_schema=response_schema,
+                max_tokens=max_tokens,
+                max_retries=max_retries - 1,
+            )

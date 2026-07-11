@@ -26,6 +26,8 @@ from app.llm.prompts import (
     WORK_EXPERIENCE_SECTION_USER,
     PROJECT_SECTION_SYSTEM,
     USER_PROJECT_SECTION_USER,
+    EDUCATION_SECTION_SYSTEM,
+    EDUCATION_SECTION_USER,
 )
 from app.storage.r2 import r2_storage
 from app.resumes.repository import LatexPackageRepository
@@ -134,12 +136,17 @@ class ResumeService:
         if jd is None:
             raise BadRequestError("Job description must be parsed before generating resume")
 
+        if not jd.raw_text or not jd.raw_text.strip():
+            raise BadRequestError("Job description text is empty; parse the JD before generating a resume")
+
         latex_key = r2_storage.key_from_url(user.original_resume_latex_url)
         original_latex = r2_storage.download_text(latex_key)
+        logger.info("ai_resume_original_latex_len=%d", len(original_latex))
 
         # Step 1: parse into JSON sections (deterministic).
         parsed = _parse_latex_sections(original_latex)
-        logger.info("ai_resume_generate_start job_id=%s user_id=%s sections=%s", str(job_id), str(user.id), sections)
+        parsed_keys = {k: len(v) for k, v in parsed.items()}
+        logger.info("ai_resume_generate_start job_id=%s user_id=%s sections=%s parsed_keys=%s", str(job_id), str(user.id), sections, parsed_keys)
 
         llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
 
@@ -153,13 +160,31 @@ class ResumeService:
             if not block:
                 logger.warning("ai_resume_section_not_found job_id=%s section=%s", str(job_id), section)
                 return section, None
+            logger.info(
+                "ai_resume_optimize_start job_id=%s section=%s block_len=%d",
+                str(job_id), section, len(block),
+            )
             prompt = cfg["user"].format(
                 job_description=jd.raw_text,
                 **{cfg["arg"]: block},
             )
             new_block = await llm.complete(
-                system=cfg["system"], user=prompt, model=user.current_llm_model
+                system=cfg["system"], user=prompt, model=user.current_llm_model,
+                max_tokens=8192,
             )
+            logger.info(
+                "ai_resume_llm_raw job_id=%s section=%s new_block_len=%d new_block_preview=%r",
+                str(job_id), section, len(new_block or ""), (new_block or "")[:400],
+            )
+            # Diagnostics: if the model echoed the block unchanged, log it so a
+            # no-op optimization is visible instead of silently producing an
+            # identical resume.
+            if new_block and new_block.strip() == block.strip():
+                logger.warning(
+                    "ai_resume_section_unchanged job_id=%s section=%s "
+                    "(model returned identical block - check JD relevance/length)",
+                    str(job_id), section,
+                )
             return section, new_block
 
         optimize_tasks = [_optimize(s) for s in sections]
@@ -173,6 +198,7 @@ class ResumeService:
                 continue
             section, new_block = res
             if not new_block:
+                logger.warning("ai_resume_section_empty job_id=%s section=%s", str(job_id), section)
                 continue
             if _validate_latex(new_block):
                 optimized_sections[section] = new_block
@@ -239,10 +265,47 @@ def _validate_latex(content: str) -> bool:
         from pylatexenc.latexwalker import LatexWalker
         walker = LatexWalker(content)
         walker.get_latex_nodes()
-        return True
     except Exception as e:
         logger.warning("latex_validation_error error=%s", str(e))
         return False
+
+    # pylatexenc runs in tolerant mode and silently ignores unclosed custom
+    # argument commands (e.g. a dangling \resumeSubheading{). Catch the most
+    # common structural breakages that would only fail at real pdflatex compile:
+    #  - unbalanced \begin{...}/\end{...}
+    #  - an unclosed brace inside a known custom arg-command like \resumeSubheading{
+    opens = content.count("\\begin{")
+    closes = content.count("\\end{")
+    if opens != closes:
+        logger.warning("latex_validation_error unbalanced_begin_end opens=%d closes=%d", opens, closes)
+        return False
+    for cmd in ("resumeSubheading", "resumeProjectHeading", "resumeSubHeadingListStart"):
+        # count occurrences that are NOT followed (eventually) by a matching '}'
+        # cheap heuristic: ensure each opening brace for these commands is closed
+        idx = 0
+        while True:
+            i = content.find("\\" + cmd, idx)
+            if i == -1:
+                break
+            # find the first '{' after the command
+            brace = content.find("{", i)
+            if brace == -1:
+                break
+            depth = 0
+            closed = False
+            for k in range(brace, len(content)):
+                if content[k] == "{":
+                    depth += 1
+                elif content[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        closed = True
+                        break
+            if not closed:
+                logger.warning("latex_validation_error unclosed_cmd cmd=%s", cmd)
+                return False
+            idx = k + 1
+    return True
 
 
 # Maps each requested section key to its prompt + the template arg name that
@@ -268,6 +331,11 @@ _SECTION_PROMPTS = {
         "user": USER_PROJECT_SECTION_USER,
         "arg": "projects_latex",
     },
+    "education": {
+        "system": EDUCATION_SECTION_SYSTEM,
+        "user": EDUCATION_SECTION_USER,
+        "arg": "education_latex",
+    },
 }
 
 # Keyword hints used to locate each section's section heading in the document.
@@ -276,6 +344,7 @@ _SECTION_KEYWORDS = {
     "skills": ["skill", "technical", "competenc"],
     "work_experience": ["experience", "work", "employment", "professional"],
     "projects": ["project"],
+    "education": ["education", "academic", "university", "college", "degree"],
 }
 
 _SECTION_HEADING_RE = re.compile(r"\\section\*?\s*\{(.*?)\}", re.DOTALL)
@@ -345,7 +414,23 @@ def _reconstruct_latex(original_latex: str, parsed: dict[str, str], optimized: d
     # Start from the original; replace spans from end to start to keep indices valid.
     rebuilt = original_latex
     for key, (start, end) in sorted(spans.items(), key=lambda kv: kv[1][0], reverse=True):
-        new_block = optimized.get(key, parsed.get(key, original_latex[start:end]))
+        original_block = original_latex[start:end]
+        new_block = optimized.get(key)
+        if not new_block:
+            # Not optimized (or the LLM returned empty/invalid) -> keep the
+            # original block verbatim so nothing is ever lost.
+            new_block = original_block
+        else:
+            # Always re-attach the ORIGINAL \section heading so the section title
+            # can never be dropped OR renamed by the model. If the model emitted a
+            # heading at the very start, strip it first to avoid duplication.
+            heading_match = _SECTION_HEADING_RE.search(original_block)
+            if heading_match:
+                orig_heading = original_block[: heading_match.end()]
+                emitted = _SECTION_HEADING_RE.match(new_block)
+                if emitted:
+                    new_block = new_block[emitted.end():].lstrip("\n")
+                new_block = orig_heading + "\n" + new_block
         rebuilt = rebuilt[:start] + new_block + rebuilt[end:]
     return rebuilt
 

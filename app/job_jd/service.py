@@ -80,8 +80,10 @@ def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
         if data.get("title"):
             meta["role"] = data["title"]
 
-        org = data.get("hiringOrganization") or {}
-        if org.get("name"):
+        org = data.get("hiringOrganization")
+        if isinstance(org, str) and org.strip():
+            meta["company"] = org.strip()
+        elif isinstance(org, dict) and org.get("name"):
             # Strip leading numeric tenant IDs like "8297 Sandvik Mining..."
             name = org["name"].strip()
             if name and name[0].isdigit():
@@ -90,8 +92,10 @@ def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
                     name = parts[1]
             meta["company"] = name
 
-        identifier = data.get("identifier") or {}
-        if identifier.get("value"):
+        identifier = data.get("identifier")
+        if isinstance(identifier, str) and identifier.strip():
+            meta["workday_job_id"] = identifier.strip()
+        elif isinstance(identifier, dict) and identifier.get("value"):
             meta["workday_job_id"] = str(identifier["value"])
 
         skills = _as_str_list(data.get("skills"))
@@ -250,7 +254,8 @@ class JobJDService:
         prompt = JD_PARSE_USER.format(raw_text=raw_text[:12000])
         logger.info("jd_llm_parse_start job_id=%s", str(job_id))
         parsed = await llm.complete_json(
-            system=JD_PARSE_SYSTEM, user=prompt, model=user.current_llm_model, response_schema=JobParseSchema
+            system=JD_PARSE_SYSTEM, user=prompt, model=user.current_llm_model,
+            response_schema=JobParseSchema, max_tokens=8192,
         )
         logger.info("jd_llm_parsed job_id=%s", str(job_id))
 
