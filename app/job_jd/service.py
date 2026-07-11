@@ -1,5 +1,6 @@
 import html as _html_mod
 import json as _json
+import re
 import uuid
 from app.common.logging import get_logger
 from typing import Optional
@@ -35,11 +36,33 @@ def _is_job_closed(text: str) -> bool:
     return any(signal in lower for signal in JD_CLOSED_SIGNALS)
 
 
-def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
-    """Extract job description and metadata from JSON-LD JobPosting schema.
+def _as_str_list(value) -> list[str]:
+    """Normalize a JSON-LD field that may be a string, list[str], or list of
+    StructuredValue dicts into a clean list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v.strip() for v in re.split(r"[;,]", value) if v.strip()]
+    if isinstance(value, list):
+        out: list[str] = []
+        for v in value:
+            if isinstance(v, str):
+                out.append(v.strip())
+            elif isinstance(v, dict):
+                name = v.get("name") or v.get("value")
+                if name:
+                    out.append(str(name).strip())
+        return [v for v in out if v]
+    return []
 
-    Workday and similar SPAs embed the full JD in structured data even though
-    the visible page body is empty (JS-rendered). This is our primary text source.
+
+def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
+    """Extract job description and structured metadata from JSON-LD JobPosting.
+
+    Workday and similar SPAs embed the full JD in structured data even when the
+    visible page body is empty (JS-rendered). This is our primary text source
+    AND our primary metadata source in non-AI mode: it reliably yields company,
+    role, workday id, skills, keywords, and team signals without any regex.
     """
     for script in soup.find_all("script", type="application/ld+json"):
         try:
@@ -51,9 +74,12 @@ def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
         description = _html_mod.unescape(data.get("description", ""))
         if not description:
             continue
+
         meta: dict = {}
+
         if data.get("title"):
             meta["role"] = data["title"]
+
         org = data.get("hiringOrganization") or {}
         if org.get("name"):
             # Strip leading numeric tenant IDs like "8297 Sandvik Mining..."
@@ -63,9 +89,32 @@ def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
                 if len(parts) == 2:
                     name = parts[1]
             meta["company"] = name
+
         identifier = data.get("identifier") or {}
         if identifier.get("value"):
             meta["workday_job_id"] = str(identifier["value"])
+
+        skills = _as_str_list(data.get("skills"))
+        if skills:
+            meta["skills"] = {"required": skills, "preferred": []}
+
+        keywords = _as_str_list(data.get("keywords"))
+        if keywords:
+            meta["keywords"] = keywords
+
+        # Team signals from industry + employment type + skills-as-tech-stack.
+        industry = data.get("industry")
+        if isinstance(industry, list):
+            industry = industry[0] if industry else None
+
+
+        if skills or (isinstance(industry, str) and industry):
+            meta["team_signals"] = {
+                "team_size": None,
+                "tech_stack": skills,
+                "industry": industry if isinstance(industry, str) else None,
+            }
+
         return description, meta
     return "", {}
 
@@ -145,6 +194,7 @@ class JobJDService:
         job_id: uuid.UUID,
         workday_url: str,
         user: User,
+        ai: bool = True,
     ) -> JobJD:
         user_svc = UserService(None)
         llm_key = user_svc.get_decrypted_llm_key(user)
@@ -152,7 +202,7 @@ class JobJDService:
             logger.info("[ERROR]: LLM provider and API key must be configured in your profile")
             raise BadRequestError("LLM provider and API key must be configured in your profile")
 
-        logger.info("jd_fetch_start job_id=%s url=%s", str(job_id), workday_url)
+        logger.info("jd_fetch_start job_id=%s url=%s ai=%s", str(job_id), workday_url, ai)
         raw_html, raw_text, extracted_meta = await fetch_jd_html(workday_url)
         logger.info("jd_fetched job_id=%s text_len=%s source_keys=%s", str(job_id), len(raw_text), list(extracted_meta.keys()))
 
@@ -165,29 +215,57 @@ class JobJDService:
                 "Failed to extract job text from the page. The page may require JavaScript rendering."
             )
 
+        if not ai:
+            parsed = {
+                "company": extracted_meta.get("company"),
+                "role": extracted_meta.get("role"),
+                "workday_job_id": extracted_meta.get("workday_job_id"),
+                "skills": extracted_meta.get("skills"),
+                "keywords": extracted_meta.get("keywords"),
+                "team_signals": extracted_meta.get("team_signals"),
+                "llm_summary": extracted_meta.get("llm_summary"),
+            }
+
+            logger.info("parsed metadata %s", parsed)
+            jd = await self.repo.upsert(
+                job_id=job_id,
+                raw_html=raw_html[:50000],
+                raw_text=raw_text[:20000],
+                company=parsed["company"],
+                role=parsed["role"],
+                workday_job_id=parsed["workday_job_id"],
+                skills=parsed["skills"],
+                keywords=parsed["keywords"],
+                team_signals=parsed["team_signals"],
+                llm_summary="Do AI parse to get llm summary",
+            )
+            logger.info(
+                "jd_parsed job_id=%s ai=False company=%s role=%s",
+                str(job_id), parsed.get("company"), parsed.get("role"),
+            )
+            return jd, parsed
+
+        # AI mode: one combined LLM call extracts fields + interview-prep learning.
         llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
         prompt = JD_PARSE_USER.format(raw_text=raw_text[:12000])
-        logger.info("prompt len: %s", len(prompt))
-
         logger.info("jd_llm_parse_start job_id=%s", str(job_id))
         parsed = await llm.complete_json(
             system=JD_PARSE_SYSTEM, user=prompt, model=user.current_llm_model, response_schema=JobParseSchema
         )
-
-        logger.info("llm response: %s", parsed)
-
-        parsed["company"] = parsed.get("company") or "PlaceHolder"
-        parsed["role"] = parsed.get("role") or "Placeholder"
-        parsed["workday_job_id"] = parsed.get("workday_job_id") or "pls update your jobId here"
+        logger.info("jd_llm_parsed job_id=%s", str(job_id))
 
         jd = await self.repo.upsert(
             job_id=job_id,
             raw_html=raw_html[:50000],
             raw_text=raw_text[:20000],
+            company=parsed.get("company"),
+            role=parsed.get("role"),
+            workday_job_id=parsed.get("workday_job_id"),
             skills=parsed.get("skills"),
             keywords=parsed.get("keywords"),
             team_signals=parsed.get("team_signals"),
             llm_summary=parsed.get("llm_summary"),
+            learning=parsed.get("learning"),
         )
-        logger.info("jd_parsed job_id=%s", str(job_id))
+        logger.info("jd_parsed job_id=%s ai=True has_learning=%s", str(job_id), bool(parsed.get("learning")))
         return jd, parsed

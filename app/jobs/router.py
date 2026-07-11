@@ -8,7 +8,7 @@ from app.database.session import get_db
 from app.common.dependencies import get_current_user
 from app.users.models import User
 from app.jobs.models import JobStatus
-from app.jobs.schemas import CreateJobRequest, JobResponse, JobListResponse, UpdateJobStatusRequest
+from app.jobs.schemas import CreateJobRequest, JobResponse, JobDetailResponse, JobListResponse, UpdateJobStatusRequest
 from app.jobs.service import JobService
 from app.job_jd.schemas import JobJDResponse
 from app.job_jd.service import JobJDService
@@ -18,18 +18,13 @@ from app.referrals.service import ReferralService
 router = APIRouter()
 
 
-@router.post("", response_model=JobResponse, status_code=201)
+@router.post("", response_model=JobDetailResponse, status_code=201)
 async def create_job(
     req: CreateJobRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    job = await JobService(db).create(req, current_user)
-    if job is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=500, detail="Failed to create job")
-    return job
+    return await JobService(db).create(req, current_user)
 
 
 @router.get("", response_model=JobListResponse)
@@ -47,12 +42,7 @@ async def get_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    job = await JobService(db).get(job_id, current_user)
-    if job is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    return await JobService(db).get(job_id, current_user)
 
 
 @router.delete("/{job_id}", status_code=204)
@@ -71,12 +61,7 @@ async def update_job_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    job = await JobService(db).update_status(job_id, req.status, current_user)
-    if job is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=500, detail="Failed to update job")
-    return job
+    return await JobService(db).update_status(job_id, req.status, current_user)
 
 
 # --- JD routes ---
@@ -105,10 +90,6 @@ async def reparse_jd(
     job = await JobService(db).get(job_id, current_user)
     jd_svc = JobJDService(db)
     jd, _ = await jd_svc.parse_and_store(job.id, job.workday_url, current_user)
-    if jd is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=500, detail="Failed to parse job JD")
     return jd
 
 

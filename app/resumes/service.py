@@ -3,7 +3,8 @@ import asyncio
 import base64
 import httpx
 import json
-from typing import Optional
+import re
+from typing import Optional, List
 
 from app.common.logging import get_logger
 
@@ -16,7 +17,16 @@ from app.users.models import User
 from app.users.repository import UserRepository
 from app.users.service import UserService
 from app.llm.client import LLMClient
-from app.llm.prompts import RESUME_SUMMARY_OPTIMIZE_SYSTEM, RESUME_SUMMARY_OPTIMIZE_USER
+from app.llm.prompts import (
+    SKILLS_SECTION_SYSTEM,
+    SKILLS_SECTION_USER,
+    PROFESSIONAL_SUMMARY_SECTION_SYSTEM,
+    PROFESSIONAL_SUMMARY_SECTION_USER,
+    WORK_EXPERIENCE_SECTION_SYSTEM,
+    WORK_EXPERIENCE_SECTION_USER,
+    PROJECT_SECTION_SYSTEM,
+    USER_PROJECT_SECTION_USER,
+)
 from app.storage.r2 import r2_storage
 from app.resumes.repository import LatexPackageRepository
 from app.resumes.schemas import CreateResumeUploadUrlsResponse, GenerateAiResumeResponse, GetResumeDownloadResponse
@@ -39,13 +49,15 @@ class ResumeService:
     # Resume endpoints decoupled from job_id
     # ------------------------------------------------------------------
 
-    def _resume_key(self, user_id: uuid.UUID, kind: str) -> str:
+    @staticmethod
+    def _resume_key(user_id: uuid.UUID, kind: str, type: str) -> str:
         """kind is 'original' or 'ai'. LaTeX source stored here."""
-        return f"resume/{user_id}/{kind}_resume.tex"
-
-    def _resume_pdf_key(self, user_id: uuid.UUID, kind: str) -> str:
-        """Matching PDF, same naming convention with a _pdf postfix."""
-        return f"resume/{user_id}/{kind}_resume_pdf.pdf"
+        if type == "latex":
+            return f"resume/{user_id}/{kind}_resume.tex"
+        elif type == "pdf":
+            return f"resume/{user_id}/{kind}_resume.pdf"
+        logger.error("resume_key_invalid_type user_id=%s kind=%s type=%s", str(user_id), kind, type)
+        return None
 
     async def create_upload_url(self, user: User) -> CreateResumeUploadUrlsResponse:
         """Mint a presigned PUT URL so the client uploads the LaTeX source of one resume copy.
@@ -71,13 +83,13 @@ class ResumeService:
         download URL. If compilation fails, the PDF URL is None but the LaTeX is kept.
         """
         kind = resume_type
-        latex_key = self._resume_key(user.id, kind)
+        latex_key = self._resume_key(user.id, kind, "tex")
         latex_text = r2_storage.download_text(latex_key)
 
         pdf_url = None
         pdf_bytes = await _compile_latex_to_pdf_via_api(latex_text, self.db)
         if pdf_bytes:
-            pdf_key = self._resume_pdf_key(user.id, kind)
+            pdf_key = self._resume_key(user.id, kind, "pdf")
             pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
         else:
             logger.warning("resume_pdf_compile_failed type=%s user_id=%s", kind, str(user.id))
@@ -99,11 +111,17 @@ class ResumeService:
             ),
         )
 
-    async def generate_ai(self, job_id: uuid.UUID, user: User) -> GenerateAiResumeResponse:
-        """Generate an ATS-friendly AI resume for a job, validate, upload, return a download URL.
+    async def generate_ai(self, job_id: uuid.UUID, sections: list[str], user: User) -> GenerateAiResumeResponse:
+        """Generate an ATS-friendly AI resume for a job by optimizing the requested sections.
 
-        Only the professional summary section is rewritten. The result is stored as
-        LaTeX only (no PDF — the client compiles). Validated with pylatexenc before upload.
+        Pipeline:
+          1. Parse the original LaTeX into JSON sections (deterministic, no LLM).
+          2. Run one LLM call PER requested section in PARALLEL (each gets only its block
+             + the JD).
+          3. For any section whose LLM output fails validation, fall back to the ORIGINAL
+             section block so the resume is always complete and compilable.
+          4. Reconstruct the full LaTeX deterministically by splicing optimized blocks
+             back into the original (no LLM in reconstruction -> fast, reliable, cheap).
         """
         user_svc = UserService(None)
         llm_key = user_svc.get_decrypted_llm_key(user)
@@ -120,33 +138,63 @@ class ResumeService:
         latex_key = r2_storage.key_from_url(user.original_resume_latex_url)
         original_latex = r2_storage.download_text(latex_key)
 
-        skills = jd.skills or {}
-        required = skills.get("required", [])
-        keywords = jd.keywords or []
+        # Step 1: parse into JSON sections (deterministic).
+        parsed = _parse_latex_sections(original_latex)
+        logger.info("ai_resume_generate_start job_id=%s user_id=%s sections=%s", str(job_id), str(user.id), sections)
 
         llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
-        prompt = RESUME_SUMMARY_OPTIMIZE_USER.format(
-            jd_summary=jd.llm_summary or "",
-            required_skills=", ".join(required),
-            keywords=", ".join(keywords[:30]),
-            latex_content=original_latex,
-        )
 
-        logger.info("ai_resume_generate_start job_id=%s user_id=%s", str(job_id), str(user.id))
-        optimized_latex = await llm.complete(system=RESUME_SUMMARY_OPTIMIZE_SYSTEM, user=prompt, model=user.current_llm_model)
+        # Step 2: parallel LLM calls (one per requested section) + topics suggestion.
+        async def _optimize(section: str):
+            cfg = _SECTION_PROMPTS.get(section)
+            if cfg is None:
+                logger.warning("ai_resume_unknown_section job_id=%s section=%s", str(job_id), section)
+                return section, None
+            block = parsed.get(section)
+            if not block:
+                logger.warning("ai_resume_section_not_found job_id=%s section=%s", str(job_id), section)
+                return section, None
+            prompt = cfg["user"].format(
+                job_description=jd.raw_text,
+                **{cfg["arg"]: block},
+            )
+            new_block = await llm.complete(
+                system=cfg["system"], user=prompt, model=user.current_llm_model
+            )
+            return section, new_block
+
+        optimize_tasks = [_optimize(s) for s in sections]
+        optimized_results = await asyncio.gather(*optimize_tasks, return_exceptions=True)
+
+        # Step 3: keep optimized block only if it validates; else fall back to original.
+        optimized_sections: dict[str, str] = {}
+        for res in optimized_results:
+            if isinstance(res, Exception):
+                logger.warning("ai_resume_section_failed error=%s", str(res))
+                continue
+            section, new_block = res
+            if not new_block:
+                continue
+            if _validate_latex(new_block):
+                optimized_sections[section] = new_block
+            else:
+                logger.warning("ai_resume_section_invalid_fallback job_id=%s section=%s", str(job_id), section)
+
+        # Step 4: deterministic reconstruction (no LLM).
+        optimized_latex = _reconstruct_latex(original_latex, parsed, optimized_sections)
 
         validated = _validate_latex(optimized_latex)
         if not validated:
             logger.warning("ai_resume_latex_validation_failed job_id=%s", str(job_id))
 
-        ai_key = self._resume_key(user.id, "ai")
+        ai_key = self._resume_key(user.id, "ai", "tex")
         latex_url = r2_storage.upload_text(ai_key, optimized_latex, RESUME_TEX_CONTENT_TYPE)
 
         # Compile the optimized LaTeX to PDF via the Lambda compiler and store it too.
         pdf_url = None
         pdf_bytes = await _compile_latex_to_pdf_via_api(optimized_latex, self.db)
         if pdf_bytes:
-            pdf_key = self._resume_pdf_key(user.id, "ai")
+            pdf_key = self._resume_key(user.id, "ai", "pdf")
             pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
         else:
             logger.warning("ai_resume_pdf_compile_failed job_id=%s", str(job_id))
@@ -158,7 +206,7 @@ class ResumeService:
             r2_storage.generate_presigned_get_url(r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS)
             if pdf_url else None
         )
-        logger.info("ai_resume_generated job_id=%s validated=%s has_pdf=%s", str(job_id), validated, bool(pdf_url))
+        logger.info("ai_resume_generated job_id=%s sections=%s validated=%s has_pdf=%s", str(job_id), sections, validated, bool(pdf_url))
         return GenerateAiResumeResponse(
             download_url=download_url,
             validated=validated,
@@ -196,6 +244,111 @@ def _validate_latex(content: str) -> bool:
     except Exception as e:
         logger.warning("latex_validation_error error=%s", str(e))
         return False
+
+
+# Maps each requested section key to its prompt + the template arg name that
+# carries the section's current LaTeX block.
+_SECTION_PROMPTS = {
+    "professional_summary": {
+        "system": PROFESSIONAL_SUMMARY_SECTION_SYSTEM,
+        "user": PROFESSIONAL_SUMMARY_SECTION_USER,
+        "arg": "current_summary_latex",
+    },
+    "skills": {
+        "system": SKILLS_SECTION_SYSTEM,
+        "user": SKILLS_SECTION_USER,
+        "arg": "skills_latex",
+    },
+    "work_experience": {
+        "system": WORK_EXPERIENCE_SECTION_SYSTEM,
+        "user": WORK_EXPERIENCE_SECTION_USER,
+        "arg": "experience_latex",
+    },
+    "projects": {
+        "system": PROJECT_SECTION_SYSTEM,
+        "user": USER_PROJECT_SECTION_USER,
+        "arg": "projects_latex",
+    },
+}
+
+# Keyword hints used to locate each section's section heading in the document.
+_SECTION_KEYWORDS = {
+    "professional_summary": ["summary", "profile", "about", "objective"],
+    "skills": ["skill", "technical", "competenc"],
+    "work_experience": ["experience", "work", "employment", "professional"],
+    "projects": ["project"],
+}
+
+_SECTION_HEADING_RE = re.compile(r"\\section\*?\s*\{(.*?)\}", re.DOTALL)
+
+
+def _parse_latex_sections(latex: str) -> dict[str, str]:
+    """Step 1: deterministically split the LaTeX document into named section blocks.
+
+    Returns a dict with keys for each known section that is present, plus
+    'header' (everything before the first section, e.g. preamble + name/contact)
+    and 'footer' (everything after the last known section). 'professional_summary'
+    falls back to the body content before the first section when no heading matches.
+    """
+    headings = list(_SECTION_HEADING_RE.finditer(latex))
+    result: dict[str, str] = {}
+
+    # Locate each known section's [start, end) span.
+    spans: dict[str, tuple[int, int]] = {}
+    for i, m in enumerate(headings):
+        title = m.group(1).lower()
+        for key, kws in _SECTION_KEYWORDS.items():
+            if any(kw in title for kw in kws):
+                start = m.start()
+                end = headings[i + 1].start() if i + 1 < len(headings) else len(latex)
+                spans[key] = (start, end)
+                break
+
+    # Header = everything before the first section heading (or whole doc if none).
+    first_heading_start = headings[0].start() if headings else len(latex)
+    result["header"] = latex[:first_heading_start]
+
+    for key, (start, end) in spans.items():
+        result[key] = latex[start:end]
+
+    # professional_summary fallback: body before the first section.
+    if "professional_summary" not in result:
+        doc_start = latex.find("\\begin{document}")
+        if doc_start != -1:
+            body_start = doc_start + len("\\begin{document}")
+            result["professional_summary"] = latex[body_start:first_heading_start]
+
+    # Footer = everything after the last known section span.
+    last_end = max((end for _, (_, end) in spans.items()), default=first_heading_start)
+    result["footer"] = latex[last_end:]
+    return result
+
+
+def _reconstruct_latex(original_latex: str, parsed: dict[str, str], optimized: dict[str, str]) -> str:
+    """Step 4: rebuild the full LaTeX document deterministically.
+
+    For each optimized section we splice its new block back at the SAME span it
+    occupied in the original (so the header/footer/preamble are untouched). Falls
+    back to the original block when a section was not optimized. No LLM involved.
+    """
+    # Recompute spans from the original so indices are valid against original_latex.
+    headings = list(_SECTION_HEADING_RE.finditer(original_latex))
+    spans: dict[str, tuple[int, int]] = {}
+    for i, m in enumerate(headings):
+        title = m.group(1).lower()
+        for key, kws in _SECTION_KEYWORDS.items():
+            if any(kw in title for kw in kws):
+                start = m.start()
+                end = headings[i + 1].start() if i + 1 < len(headings) else len(original_latex)
+                spans[key] = (start, end)
+                break
+
+    # Start from the original; replace spans from end to start to keep indices valid.
+    rebuilt = original_latex
+    for key, (start, end) in sorted(spans.items(), key=lambda kv: kv[1][0], reverse=True):
+        new_block = optimized.get(key, parsed.get(key, original_latex[start:end]))
+        rebuilt = rebuilt[:start] + new_block + rebuilt[end:]
+    return rebuilt
 
 
 async def _compile_latex_to_pdf_via_api(latex: str, db: Optional[AsyncSession] = None, max_retries: int = 2) -> Optional[bytes]:

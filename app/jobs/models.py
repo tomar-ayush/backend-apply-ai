@@ -58,9 +58,6 @@ class Job(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    company: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(255), nullable=False)
-    workday_job_id: Mapped[Optional[str]] = mapped_column(String(255))
     workday_url: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[JobStatus] = mapped_column(
         SAEnum(JobStatus, name="job_status_enum"), nullable=False, default=JobStatus.NEW, index=True

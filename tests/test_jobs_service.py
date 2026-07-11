@@ -43,11 +43,12 @@ async def test_update_status_valid_transition():
     with patch("app.jobs.service.JobRepository") as MockRepo:
         mock_repo = AsyncMock()
         mock_repo.get_by_id = AsyncMock(return_value=job)
-        mock_repo.update = AsyncMock(return_value=make_job(status=JobStatus.JD_PARSED))
+        mock_repo.update = AsyncMock(return_value=job)
         MockRepo.return_value = mock_repo
         svc = JobService(db)
         result = await svc.update_status(job.id, JobStatus.JD_PARSED, user)
-        mock_repo.update.assert_called_once()
+        mock_repo.update.assert_called_once_with(job, status=JobStatus.JD_PARSED)
+        assert result is job
 
 
 @pytest.mark.asyncio

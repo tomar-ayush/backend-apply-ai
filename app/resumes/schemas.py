@@ -1,11 +1,19 @@
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 
 from pydantic import BaseModel
+
+
+RESUME_SECTIONS = Literal["professional_summary", "skills", "work_experience", "projects"]
 
 
 class CreateResumeUploadUrlsResponse(BaseModel):
     """Presigned PUT URL for the client to upload the LaTeX source of a resume copy."""
     latex_presigned_url: str
+
+
+class GenerateAiResumeRequest(BaseModel):
+    """Sections of the resume to optimize. They are rewritten in parallel."""
+    sections: List[RESUME_SECTIONS]
 
 
 class GenerateAiResumeResponse(BaseModel):

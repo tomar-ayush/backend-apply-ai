@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.jobs.models import Job, JobStatus, is_valid_job_transition
 from app.jobs.repository import JobRepository
-from app.jobs.schemas import CreateJobRequest, JobResponse, JobListResponse
+from app.jobs.schemas import CreateJobRequest, JobResponse, JobDetailResponse, JobListResponse
 from app.job_jd.service import JobJDService
 from app.users.models import User
 from app.common.exceptions import NotFoundError, InvalidTransitionError, ForbiddenError
@@ -19,53 +19,43 @@ class JobService:
         self.db = db
         self.repo = JobRepository(db)
 
-    async def _assert_ownership(self, job: Job, user_id: uuid.UUID) -> None:
+    def _assert_ownership(self, job: Job, user_id: uuid.UUID) -> None:
         if job.user_id != user_id:
             raise ForbiddenError("You do not have access to this job")
-
-    async def create(self, req: CreateJobRequest, user: User) -> Job:
+    async def create(self, req: CreateJobRequest, user: User) -> JobDetailResponse:
         try:
-            job = Job(user_id=user.id, workday_url=req.workday_url, status=JobStatus.NEW, company="PlaceHolder", role="Placeholder")
+            job = Job(user_id=user.id, workday_url=req.workday_url, status=JobStatus.NEW)
             self.db.add(job)
             await self.db.flush()
 
             jd_svc = JobJDService(self.db)
-            jd, parsed = await jd_svc.parse_and_store(job.id, req.workday_url, user)
+            jd, _ = await jd_svc.parse_and_store(job.id, req.workday_url, user, ai=req.ai)
 
-            updates = {"status": JobStatus.JD_PARSED}
-            if parsed.get("company"):
-                updates["company"] = parsed["company"]
-            if parsed.get("role"):
-                updates["role"] = parsed["role"]
-            if parsed.get("workday_job_id"):
-                updates["workday_job_id"] = parsed["workday_job_id"]
-
-            for k, v in updates.items():
-                setattr(job, k, v)
+            job.status = JobStatus.JD_PARSED
             await self.db.flush()
-
-            logger.info("Fetched JD %s", jd)
-            logger.info("Parsed JD %s", parsed)
 
             logger.info("job_created job_id=%s user_id=%s", str(job.id), str(user.id))
             await self.db.refresh(job)
 
-            return job
+            return JobDetailResponse.from_job(job, jd)
         except Exception as e:
             # log and re-raise so the outer dependency session can rollback
             logger.info("[Warning] jd_parse_failed_on_create job_id=%s error=%s", str(user.id), str(e))
             raise
 
     async def list(self, user: User, status: Optional[JobStatus] = None) -> JobListResponse:
-        items = await self.repo.list_by_user(user.id, status=status)
+        rows = await self.repo.list_with_jd(user.id, status=status)
         total = await self.repo.count_by_user(user.id, status=status)
-        return JobListResponse(items=[JobResponse.model_validate(j) for j in items], total=total)
+        return JobListResponse(
+            items=[JobDetailResponse.from_job(job, jd) for job, jd in rows],
+            total=total,
+        )
 
     async def get(self, job_id: uuid.UUID, user: User) -> Job:
         job = await self.repo.get_by_id(job_id)
         if job is None:
             raise NotFoundError("Job", str(job_id))
-        await self._assert_ownership(job, user.id)
+        self._assert_ownership(job, user.id)
         return job
 
     async def delete(self, job_id: uuid.UUID, user: User) -> None:

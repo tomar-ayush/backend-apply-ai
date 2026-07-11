@@ -10,6 +10,7 @@ from app.users.models import User
 from app.resumes.service import ResumeService
 from app.resumes.schemas import (
     CreateResumeUploadUrlsResponse,
+    GenerateAiResumeRequest,
     GenerateAiResumeResponse,
     GetResumeDownloadResponse,
 )
@@ -32,11 +33,16 @@ async def create_resume_upload_url(
 @router.post("/generate/{job_id}", response_model=GenerateAiResumeResponse, status_code=201)
 async def generate_ai_resume(
     job_id: uuid.UUID,
+    payload: GenerateAiResumeRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate an ATS-friendly AI resume for a job, validate, upload, return a download URL."""
-    return await ResumeService(db).generate_ai(job_id, current_user)
+    """Optimize the requested resume sections for a job and return a download URL.
+
+    The client sends `sections` (e.g. ["summary", "skills", "experience"]) which are
+    each rewritten by a dedicated LLM pass, in order, then compiled to PDF.
+    """
+    return await ResumeService(db).generate_ai(job_id, payload.sections, current_user)
 
 
 @router.post("/finalize/{resume_type}", response_model=GetResumeDownloadResponse, status_code=201)

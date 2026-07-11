@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, JSON, ForeignKey, DateTime, func
+from sqlalchemy import String, Text, JSON, ForeignKey, DateTime, func, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -22,12 +22,16 @@ class JobJD(Base):
         unique=True,
         index=True,
     )
+    company: Mapped[Optional[str]] = mapped_column(String(255))
+    role: Mapped[Optional[str]] = mapped_column(String(255))
+    workday_job_id: Mapped[Optional[str]] = mapped_column(String(255))
     raw_html: Mapped[Optional[str]] = mapped_column(Text)
     raw_text: Mapped[Optional[str]] = mapped_column(Text)
     skills: Mapped[Optional[dict]] = mapped_column(JSON)
     keywords: Mapped[Optional[dict]] = mapped_column(JSON)
     team_signals: Mapped[Optional[dict]] = mapped_column(JSON)
     llm_summary: Mapped[Optional[str]] = mapped_column(Text)
+    learning: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
