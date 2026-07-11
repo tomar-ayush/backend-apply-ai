@@ -52,12 +52,11 @@ class ResumeService:
     @staticmethod
     def _resume_key(user_id: uuid.UUID, kind: str, type: str) -> str:
         """kind is 'original' or 'ai'. LaTeX source stored here."""
-        if type == "latex":
+        if type == "tex":
             return f"resume/{user_id}/{kind}_resume.tex"
         elif type == "pdf":
             return f"resume/{user_id}/{kind}_resume.pdf"
-        logger.error("resume_key_invalid_type user_id=%s kind=%s type=%s", str(user_id), kind, type)
-        return None
+        raise ValueError(f"Unknown resume key type: {type!r}")
 
     async def create_upload_url(self, user: User) -> CreateResumeUploadUrlsResponse:
         """Mint a presigned PUT URL so the client uploads the LaTeX source of one resume copy.
@@ -239,7 +238,7 @@ def _validate_latex(content: str) -> bool:
     try:
         from pylatexenc.latexwalker import LatexWalker
         walker = LatexWalker(content)
-        walker.get_latex_breakup()  # parse the whole document
+        walker.get_latex_nodes()
         return True
     except Exception as e:
         logger.warning("latex_validation_error error=%s", str(e))
