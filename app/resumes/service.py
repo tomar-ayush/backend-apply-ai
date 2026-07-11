@@ -2,6 +2,7 @@ import uuid
 import asyncio
 import base64
 import httpx
+import json
 from typing import Optional
 
 from app.common.logging import get_logger
@@ -17,6 +18,7 @@ from app.users.service import UserService
 from app.llm.client import LLMClient
 from app.llm.prompts import RESUME_SUMMARY_OPTIMIZE_SYSTEM, RESUME_SUMMARY_OPTIMIZE_USER
 from app.storage.r2 import r2_storage
+from app.resumes.repository import LatexPackageRepository
 from app.resumes.schemas import CreateResumeUploadUrlsResponse, GenerateAiResumeResponse, GetResumeDownloadResponse
 from app.common.exceptions import BadRequestError, NotFoundError
 
@@ -73,7 +75,7 @@ class ResumeService:
         latex_text = r2_storage.download_text(latex_key)
 
         pdf_url = None
-        pdf_bytes = await _compile_latex_to_pdf_via_api(latex_text)
+        pdf_bytes = await _compile_latex_to_pdf_via_api(latex_text, self.db)
         if pdf_bytes:
             pdf_key = self._resume_pdf_key(user.id, kind)
             pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
@@ -142,7 +144,7 @@ class ResumeService:
 
         # Compile the optimized LaTeX to PDF via the Lambda compiler and store it too.
         pdf_url = None
-        pdf_bytes = await _compile_latex_to_pdf_via_api(optimized_latex)
+        pdf_bytes = await _compile_latex_to_pdf_via_api(optimized_latex, self.db)
         if pdf_bytes:
             pdf_key = self._resume_pdf_key(user.id, "ai")
             pdf_url = r2_storage.upload_bytes(pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
@@ -196,15 +198,19 @@ def _validate_latex(content: str) -> bool:
         return False
 
 
-async def _compile_latex_to_pdf_via_api(latex: str, max_retries: int = 2) -> Optional[bytes]:
+async def _compile_latex_to_pdf_via_api(latex: str, db: Optional[AsyncSession] = None, max_retries: int = 2) -> Optional[bytes]:
     """Compile LaTeX to PDF via the self-hosted AWS Lambda (TeXLive) compiler.
 
     POSTs the .tex as JSON `{"latex_base64": "<base64 source>"}` (matches the Lambda
     handler's `latex_base64` branch — safest for backslash-heavy source). On success
-    the Lambda returns a JSON envelope: statusCode 200, `isBase64Encoded: true`,
-    `body` = base64 PDF. On failure it returns 422 with a JSON body containing the
-    LaTeX log tail. Retries up to `max_retries` times with a short backoff. Returns
-    raw PDF bytes, or None if every attempt fails.
+    Over a Lambda Function URL the handler's `isBase64Encoded` envelope is stripped
+    by API Gateway, so a successful compile returns the RAW PDF bytes with
+    `Content-Type: application/pdf` — we capture `resp.content` directly. If the
+    Lambda had to install missing packages on the fly it echoes them in the
+    `X-Latex-Fallback-Used` header; those are upserted into latex_package_usage when
+    `db` is provided. On failure the Lambda returns 422 with a JSON body containing
+    the LaTeX log tail. Retries up to `max_retries` times with a short backoff.
+    Returns raw PDF bytes, or None if every attempt fails.
     """
     url = settings.LATEX_COMPILE_URL
     if not url:
@@ -224,15 +230,16 @@ async def _compile_latex_to_pdf_via_api(latex: str, max_retries: int = 2) -> Opt
             )
 
             if resp.status_code == 200:
-                body = resp.json()
-                if body.get("isBase64Encoded") and body.get("body"):
-                    pdf = base64.b64decode(body["body"])
+                ctype = (resp.headers.get("content-type") or "").lower()
+                if "application/pdf" in ctype:
+                    pdf = resp.content
                     if pdf.startswith(b"%PDF"):
                         logger.info("latex_compile_ok attempt=%d/%d bytes=%d", attempt, max_retries, len(pdf))
+                        await _record_fallback_packages(resp, db)
                         return pdf
                     logger.warning("latex_compile_bad_pdf attempt=%d head=%s", attempt, pdf[:40])
                     return None
-                logger.warning("latex_compile_bad_response attempt=%d keys=%s", attempt, list(body.keys()))
+                logger.warning("latex_compile_bad_response attempt=%d ctype=%s head=%s", attempt, ctype, resp.content[:40])
                 return None
 
             # 422 etc: surface the log tail so callers can debug missing packages.
@@ -249,3 +256,28 @@ async def _compile_latex_to_pdf_via_api(latex: str, max_retries: int = 2) -> Opt
 
     logger.error("latex_compile_all_failed")
     return None
+
+
+async def _record_fallback_packages(resp, db) -> None:
+    """If the Lambda installed packages on the fly (X-Latex-Fallback-Used header),
+    upsert each into latex_package_usage, incrementing its download count."""
+    if db is None:
+        return
+    header = resp.headers.get("X-Latex-Fallback-Used")
+    if not header:
+        return
+    try:
+        packages = json.loads(header)
+    except Exception:
+        logger.warning("latex_fallback_header_parse_failed header=%s", header[:200])
+        return
+    if not isinstance(packages, list):
+        return
+    repo = LatexPackageRepository(db)
+    for pkg in packages:
+        if not pkg:
+            continue
+        try:
+            await repo.record_usage(pkg)
+        except Exception as e:
+            logger.warning("latex_fallback_record_failed pkg=%s error=%s", pkg, str(e))

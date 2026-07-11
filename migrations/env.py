@@ -13,6 +13,7 @@ import app.jobs.models
 import app.job_jd.models
 import app.referrals.models
 import app.tasks.models
+import app.resumes.models
 
 config = context.config
 
