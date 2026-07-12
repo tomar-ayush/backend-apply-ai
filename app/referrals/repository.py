@@ -31,19 +31,54 @@ class ReferralRepository:
         `order_by` names a Referral column to sort by (defaults to "priority").
         `descending` flips the sort direction. Backward compatible: with no
         args it returns referrals ordered by priority ascending.
+
+        Special value `order_by="status"` applies a workflow-aware grouping in
+        the order RESPONDED -> NOT_CONTACTED -> REQUESTED -> DECLINED, with
+        priority ascending as the secondary sort inside each group. This
+        surfaces the most actionable referrals on top.
         """
-        from sqlalchemy import asc, desc
+        from sqlalchemy import asc, desc, case
+
+        if order_by == "status":
+            # Lower rank = shown first.
+            status_rank = case(
+                {
+                    ReferralStatus.RESPONDED: 0,
+                    ReferralStatus.NOT_CONTACTED: 1,
+                    ReferralStatus.REQUESTED: 2,
+                    ReferralStatus.DECLINED: 3,
+                },
+                value=Referral.status,
+            )
+            stmt = (
+                select(Referral)
+                .where(Referral.job_id == job_id)
+                .order_by(
+                    status_rank.asc(),
+                    Referral.priority.asc(),
+                    Referral.created_at.asc(),
+                    Referral.id.asc(),
+                )
+            )
+            result = await self.db.execute(stmt)
+            return list(result.scalars().all())
 
         column = getattr(Referral, order_by, None)
         if column is None:
             raise BadRequestError(
                 f"Cannot order referrals by unknown field: {order_by!r}"
             )
+
         stmt = (
             select(Referral)
             .where(Referral.job_id == job_id)
-            .order_by(desc(column) if descending else asc(column))
+            .order_by(
+                desc(column) if descending else asc(column),
+                Referral.created_at.asc(),
+                Referral.id.asc(),
+            )
         )
+
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
