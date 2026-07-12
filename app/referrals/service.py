@@ -18,8 +18,6 @@ from app.jobs.models import Job
 from app.users.models import User
 from app.job_jd.repository import JobJDRepository
 from app.jobs.repository import JobRepository
-from app.llm.client import LLMClient
-from app.llm.prompts import REFERRAL_SEARCH_SYSTEM, REFERRAL_SEARCH_USER
 from app.common.exceptions import NotFoundError, InvalidTransitionError, BadRequestError, ForbiddenError
 from app.config import settings
 

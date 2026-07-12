@@ -1,0 +1,2 @@
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 72
