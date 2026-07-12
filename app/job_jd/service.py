@@ -274,3 +274,31 @@ class JobJDService:
         )
         logger.info("jd_parsed job_id=%s ai=True has_learning=%s", str(job_id), bool(parsed.get("learning")))
         return jd, parsed
+
+    async def update(
+        self,
+        job_id: uuid.UUID,
+        data: UpdateJDRequest,
+    ) -> JobJD:
+        """Apply a partial update to an existing JD."""
+        jd = await self.get_by_job_id(job_id)
+
+        # Build a dict of only the fields the client sent. Pydantic v2 exposes
+        # `model_fields_set` so we update exactly what was provided, leaving
+        # omitted fields (even if they were None) unchanged.
+        updates = {
+            k: v
+            for k, v in data.model_dump().items()
+            if k in data.model_fields_set
+        }
+        if not updates:
+            logger.info("jd_update_noop job_id=%s", str(job_id))
+            return jd
+
+        jd = await self.repo.update(jd, **updates)
+        logger.info(
+            "jd_updated job_id=%s fields=%s",
+            str(job_id),
+            list(updates.keys()),
+        )
+        return jd

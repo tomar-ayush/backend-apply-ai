@@ -93,6 +93,18 @@ async def reparse_jd(
     return jd
 
 
+@router.patch("/{job_id}/jd", response_model=JobJDResponse)
+async def update_jd(
+    job_id: uuid.UUID,
+    req: UpdateJDRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Partially update the JD."""
+    await JobService(db).get(job_id, current_user)
+    return await JobJDService(db).update(job_id, req)
+
+
 # --- Referral routes ---
 
 @router.post("/{job_id}/referrals/generate", response_model=GenerateReferralsResponse)
