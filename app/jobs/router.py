@@ -8,11 +8,20 @@ from app.database.session import get_db
 from app.common.dependencies import get_current_user
 from app.users.models import User
 from app.jobs.models import JobStatus
-from app.jobs.schemas import CreateJobRequest, JobResponse, JobDetailResponse, JobListResponse, UpdateJobStatusRequest
+from app.jobs.schemas import (
+    CreateJobRequest,
+    JobResponse,
+    JobDetailResponse,
+    JobListResponse,
+    UpdateJobStatusRequest,
+)
 from app.jobs.service import JobService
-from app.job_jd.schemas import JobJDResponse
+from app.job_jd.schemas import JobJDResponse, UpdateJDRequest
 from app.job_jd.service import JobJDService
-from app.referrals.schemas import GenerateReferralsResponse, ReferralResponse
+from app.referrals.schemas import (
+    GenerateReferralsResponse,
+    ReferralResponse,
+)
 from app.referrals.service import ReferralService
 
 router = APIRouter()
@@ -61,10 +70,13 @@ async def update_job_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await JobService(db).update_status(job_id, req.status, current_user)
+    return await JobService(db).update_status(
+        job_id, req.status, current_user
+    )
 
 
 # --- JD routes ---
+
 
 @router.get("/{job_id}/jd", response_model=JobJDResponse)
 async def get_jd(
@@ -89,7 +101,9 @@ async def reparse_jd(
 ):
     job = await JobService(db).get(job_id, current_user)
     jd_svc = JobJDService(db)
-    jd, _ = await jd_svc.parse_and_store(job.id, job.workday_url, current_user)
+    jd, _ = await jd_svc.parse_and_store(
+        job.id, job.workday_url, current_user
+    )
     return jd
 
 
@@ -107,7 +121,11 @@ async def update_jd(
 
 # --- Referral routes ---
 
-@router.post("/{job_id}/referrals/generate", response_model=GenerateReferralsResponse)
+
+@router.post(
+    "/{job_id}/referrals/generate",
+    response_model=GenerateReferralsResponse,
+)
 async def generate_referrals(
     job_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
@@ -117,7 +135,9 @@ async def generate_referrals(
     return await ReferralService(db).generate(job, current_user)
 
 
-@router.get("/{job_id}/referrals", response_model=list[ReferralResponse])
+@router.get(
+    "/{job_id}/referrals", response_model=list[ReferralResponse]
+)
 async def list_referrals(
     job_id: uuid.UUID,
     current_user: User = Depends(get_current_user),

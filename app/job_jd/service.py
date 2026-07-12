@@ -3,7 +3,6 @@ import json as _json
 import re
 import uuid
 from app.common.logging import get_logger
-from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -11,12 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.job_jd.models import JobJD
 from app.job_jd.repository import JobJDRepository
-from app.job_jd.schemas import JobJDResponse
+from app.job_jd.schemas import UpdateJDRequest
 from app.llm.schemas import JobParseSchema
 from app.users.models import User
 from app.llm.client import LLMClient
 from app.llm.prompts import JD_PARSE_SYSTEM, JD_PARSE_USER
-from app.common.exceptions import NotFoundError, BadRequestError, ExternalServiceError
+from app.common.exceptions import (
+    NotFoundError,
+    BadRequestError,
+    ExternalServiceError,
+)
 from app.users.service import UserService
 
 logger = get_logger(__name__)
@@ -42,7 +45,9 @@ def _as_str_list(value) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
-        return [v.strip() for v in re.split(r"[;,]", value) if v.strip()]
+        return [
+            v.strip() for v in re.split(r"[;,]", value) if v.strip()
+        ]
     if isinstance(value, list):
         out: list[str] = []
         for v in value:
@@ -111,12 +116,13 @@ def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
         if isinstance(industry, list):
             industry = industry[0] if industry else None
 
-
         if skills or (isinstance(industry, str) and industry):
             meta["team_signals"] = {
                 "team_size": None,
                 "tech_stack": skills,
-                "industry": industry if isinstance(industry, str) else None,
+                "industry": industry
+                if isinstance(industry, str)
+                else None,
             }
 
         return description, meta
@@ -131,7 +137,9 @@ def _extract_og_description(soup: BeautifulSoup) -> str:
 
 
 async def fetch_jd_html(url: str) -> tuple[str, str, dict]:
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=30, follow_redirects=True
+    ) as client:
         try:
             response = await client.get(
                 url,
@@ -145,7 +153,9 @@ async def fetch_jd_html(url: str) -> tuple[str, str, dict]:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise BadRequestError(f"Failed to fetch job URL: HTTP {e.response.status_code}")
+            raise BadRequestError(
+                f"Failed to fetch job URL: HTTP {e.response.status_code}"
+            )
         except httpx.RequestError as e:
             raise ExternalServiceError("JD Fetch", str(e))
 
@@ -159,15 +169,22 @@ async def fetch_jd_html(url: str) -> tuple[str, str, dict]:
     # Natural full-text extraction: strip non-content tags, keep everything else.
     # Robust across Workday SPAs, LinkedIn, and classic job boards.
     text_soup = BeautifulSoup(html, "html.parser")
-    for tag in text_soup(["script", "style", "header", "footer", "nav"]):
+    for tag in text_soup(
+        ["script", "style", "header", "footer", "nav"]
+    ):
         tag.decompose()
     visible_text = "\n".join(
-        ln.strip() for ln in text_soup.get_text(separator="\n").splitlines() if ln.strip()
+        ln.strip()
+        for ln in text_soup.get_text(separator="\n").splitlines()
+        if ln.strip()
     )
 
     # Priority: JSON-LD > og:description > visible text > raw HTML (last resort)
     if jsonld_text:
-        logger.info("jd_source=jsonld extracted_meta_keys=%s", list(extracted_meta.keys()))
+        logger.info(
+            "jd_source=jsonld extracted_meta_keys=%s",
+            list(extracted_meta.keys()),
+        )
         return html, jsonld_text, extracted_meta
 
     if og_text:
@@ -203,18 +220,40 @@ class JobJDService:
         user_svc = UserService(None)
         llm_key = user_svc.get_decrypted_llm_key(user)
         if not llm_key or not user.llm_provider:
-            logger.info("[ERROR]: LLM provider and API key must be configured in your profile")
-            raise BadRequestError("LLM provider and API key must be configured in your profile")
+            logger.info(
+                "[ERROR]: LLM provider and API key must be configured in your profile"
+            )
+            raise BadRequestError(
+                "LLM provider and API key must be configured in your profile"
+            )
 
-        logger.info("jd_fetch_start job_id=%s url=%s ai=%s", str(job_id), workday_url, ai)
-        raw_html, raw_text, extracted_meta = await fetch_jd_html(workday_url)
-        logger.info("jd_fetched job_id=%s text_len=%s source_keys=%s", str(job_id), len(raw_text), list(extracted_meta.keys()))
+        logger.info(
+            "jd_fetch_start job_id=%s url=%s ai=%s",
+            str(job_id),
+            workday_url,
+            ai,
+        )
+        raw_html, raw_text, extracted_meta = await fetch_jd_html(
+            workday_url
+        )
+        logger.info(
+            "jd_fetched job_id=%s text_len=%s source_keys=%s",
+            str(job_id),
+            len(raw_text),
+            list(extracted_meta.keys()),
+        )
 
         if _is_job_closed(raw_text):
-            raise BadRequestError("This job posting is no longer available or has been closed")
+            raise BadRequestError(
+                "This job posting is no longer available or has been closed"
+            )
 
         if not raw_text.strip():
-            logger.warning("jd_text_empty job_id=%s url=%s", str(job_id), workday_url)
+            logger.warning(
+                "jd_text_empty job_id=%s url=%s",
+                str(job_id),
+                workday_url,
+            )
             raise BadRequestError(
                 "Failed to extract job text from the page. The page may require JavaScript rendering."
             )
@@ -245,7 +284,9 @@ class JobJDService:
             )
             logger.info(
                 "jd_parsed job_id=%s ai=False company=%s role=%s",
-                str(job_id), parsed.get("company"), parsed.get("role"),
+                str(job_id),
+                parsed.get("company"),
+                parsed.get("role"),
             )
             return jd, parsed
 
@@ -254,8 +295,11 @@ class JobJDService:
         prompt = JD_PARSE_USER.format(raw_text=raw_text[:12000])
         logger.info("jd_llm_parse_start job_id=%s", str(job_id))
         parsed = await llm.complete_json(
-            system=JD_PARSE_SYSTEM, user=prompt, model=user.current_llm_model,
-            response_schema=JobParseSchema, max_tokens=8192,
+            system=JD_PARSE_SYSTEM,
+            user=prompt,
+            model=user.current_llm_model,
+            response_schema=JobParseSchema,
+            max_tokens=8192,
         )
         logger.info("jd_llm_parsed job_id=%s", str(job_id))
 
@@ -272,7 +316,11 @@ class JobJDService:
             llm_summary=parsed.get("llm_summary"),
             learning=parsed.get("learning"),
         )
-        logger.info("jd_parsed job_id=%s ai=True has_learning=%s", str(job_id), bool(parsed.get("learning")))
+        logger.info(
+            "jd_parsed job_id=%s ai=True has_learning=%s",
+            str(job_id),
+            bool(parsed.get("learning")),
+        )
         return jd, parsed
 
     async def update(

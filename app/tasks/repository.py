@@ -11,8 +11,12 @@ class TaskRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, task_id: str | uuid.UUID) -> Optional[Task]:
-        result = await self.db.execute(select(Task).where(Task.id == task_id))
+    async def get_by_id(
+        self, task_id: str | uuid.UUID
+    ) -> Optional[Task]:
+        result = await self.db.execute(
+            select(Task).where(Task.id == task_id)
+        )
         return result.scalar_one_or_none()
 
     async def list_by_job(self, job_id: str | uuid.UUID) -> List[Task]:
@@ -23,7 +27,9 @@ class TaskRepository:
         )
         return list(result.scalars().all())
 
-    async def list_by_user(self, user_id: str | uuid.UUID) -> List[Task]:
+    async def list_by_user(
+        self, user_id: str | uuid.UUID
+    ) -> List[Task]:
         result = await self.db.execute(
             select(Task)
             .where(Task.user_id == user_id)

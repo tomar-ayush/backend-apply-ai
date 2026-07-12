@@ -11,14 +11,19 @@ class ReferralRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_id(self, referral_id: str | uuid.UUID) -> Optional[Referral]:
-        result = await self.db.execute(select(Referral).where(Referral.id == referral_id))
+    async def get_by_id(
+        self, referral_id: str | uuid.UUID
+    ) -> Optional[Referral]:
+        result = await self.db.execute(
+            select(Referral).where(Referral.id == referral_id)
+        )
         return result.scalar_one_or_none()
 
-    async def list_by_job(self, job_id: str | uuid.UUID) -> List[Referral]:
+    async def list_by_job(
+        self, job_id: str | uuid.UUID
+    ) -> List[Referral]:
         result = await self.db.execute(
-            select(Referral)
-            .where(Referral.job_id == job_id)
+            select(Referral).where(Referral.job_id == job_id)
         )
         return list(result.scalars().all())
 

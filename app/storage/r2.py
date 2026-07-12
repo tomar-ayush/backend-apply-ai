@@ -18,7 +18,9 @@ class R2Storage:
     def _get_client(self):
         if self._client is None:
             if not settings.R2_ACCOUNT_ID:
-                raise ExternalServiceError("R2", "R2 credentials not configured")
+                raise ExternalServiceError(
+                    "R2", "R2 credentials not configured"
+                )
             self._client = boto3.client(
                 "s3",
                 endpoint_url=f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
@@ -28,7 +30,12 @@ class R2Storage:
             )
         return self._client
 
-    def upload_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    def upload_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> str:
         try:
             client = self._get_client()
             client.put_object(
@@ -42,16 +49,24 @@ class R2Storage:
             logger.error("r2_upload_error key=%s error=%s", key, str(e))
             raise ExternalServiceError("R2", str(e))
 
-    def upload_text(self, key: str, text: str, content_type: str = "text/plain") -> str:
-        return self.upload_bytes(key, text.encode("utf-8"), content_type)
+    def upload_text(
+        self, key: str, text: str, content_type: str = "text/plain"
+    ) -> str:
+        return self.upload_bytes(
+            key, text.encode("utf-8"), content_type
+        )
 
     def download_bytes(self, key: str) -> bytes:
         try:
             client = self._get_client()
-            response = client.get_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+            response = client.get_object(
+                Bucket=settings.R2_BUCKET_NAME, Key=key
+            )
             return response["Body"].read()
         except (BotoCoreError, ClientError) as e:
-            logger.error("r2_download_error key=%s error=%s", key, str(e))
+            logger.error(
+                "r2_download_error key=%s error=%s", key, str(e)
+            )
             raise ExternalServiceError("R2", str(e))
 
     def download_text(self, key: str) -> str:
@@ -68,12 +83,17 @@ class R2Storage:
     def delete(self, key: str) -> None:
         try:
             client = self._get_client()
-            client.delete_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+            client.delete_object(
+                Bucket=settings.R2_BUCKET_NAME, Key=key
+            )
         except (BotoCoreError, ClientError) as e:
             logger.error("r2_delete_error key=%s error=%s", key, str(e))
 
     def generate_presigned_put_url(
-        self, key: str, content_type: str = "text/x-tex", expires_in: int = 900
+        self,
+        key: str,
+        content_type: str = "text/x-tex",
+        expires_in: int = 900,
     ) -> str:
         """Return a presigned PUT URL the client can use to upload a file directly to R2."""
         try:
@@ -88,10 +108,14 @@ class R2Storage:
                 ExpiresIn=expires_in,
             )
         except (BotoCoreError, ClientError) as e:
-            logger.error("r2_presign_put_error key=%s error=%s", key, str(e))
+            logger.error(
+                "r2_presign_put_error key=%s error=%s", key, str(e)
+            )
             raise ExternalServiceError("R2", str(e))
 
-    def generate_presigned_get_url(self, key: str, expires_in: int = 900) -> str:
+    def generate_presigned_get_url(
+        self, key: str, expires_in: int = 900
+    ) -> str:
         """Return a presigned GET URL the client can use to download a file from R2."""
         try:
             client = self._get_client()
@@ -101,7 +125,9 @@ class R2Storage:
                 ExpiresIn=expires_in,
             )
         except (BotoCoreError, ClientError) as e:
-            logger.error("r2_presign_get_error key=%s error=%s", key, str(e))
+            logger.error(
+                "r2_presign_get_error key=%s error=%s", key, str(e)
+            )
             raise ExternalServiceError("R2", str(e))
 
 

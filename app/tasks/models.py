@@ -3,7 +3,14 @@ import enum
 from datetime import datetime
 from typing import Optional, Set
 
-from sqlalchemy import String, Text, Enum as SAEnum, ForeignKey, DateTime, func
+from sqlalchemy import (
+    String,
+    Text,
+    Enum as SAEnum,
+    ForeignKey,
+    DateTime,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
@@ -23,18 +30,27 @@ class TaskStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
-TERMINAL_TASK_STATUSES: Set[TaskStatus] = {TaskStatus.COMPLETED, TaskStatus.FAILED}
+TERMINAL_TASK_STATUSES: Set[TaskStatus] = {
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+}
 
 VALID_TASK_TRANSITIONS: dict[TaskStatus, Set[TaskStatus]] = {
     TaskStatus.QUEUED: {TaskStatus.RUNNING, TaskStatus.FAILED},
-    TaskStatus.RUNNING: {TaskStatus.WAITING_USER, TaskStatus.COMPLETED, TaskStatus.FAILED},
+    TaskStatus.RUNNING: {
+        TaskStatus.WAITING_USER,
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+    },
     TaskStatus.WAITING_USER: {TaskStatus.RUNNING, TaskStatus.FAILED},
     TaskStatus.COMPLETED: set(),
     TaskStatus.FAILED: set(),
 }
 
 
-def is_valid_task_transition(current: TaskStatus, next_status: TaskStatus) -> bool:
+def is_valid_task_transition(
+    current: TaskStatus, next_status: TaskStatus
+) -> bool:
     return next_status in VALID_TASK_TRANSITIONS.get(current, set())
 
 
@@ -45,15 +61,23 @@ class Task(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     task_type: Mapped[TaskType] = mapped_column(
         SAEnum(TaskType, name="task_type_enum"), nullable=False
     )
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     status: Mapped[TaskStatus] = mapped_column(
         SAEnum(TaskStatus, name="task_status_enum"),
         nullable=False,
@@ -66,7 +90,9 @@ class Task(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     job: Mapped["Job"] = relationship("Job", back_populates="tasks")

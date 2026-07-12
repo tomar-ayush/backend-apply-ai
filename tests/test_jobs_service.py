@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.jobs.models import JobStatus
 from app.jobs.service import JobService
-from app.common.exceptions import InvalidTransitionError, ForbiddenError, NotFoundError
+from app.common.exceptions import (
+    InvalidTransitionError,
+    ForbiddenError,
+    NotFoundError,
+)
 from tests.conftest import make_user, make_job
 
 
@@ -46,8 +50,12 @@ async def test_update_status_valid_transition():
         mock_repo.update = AsyncMock(return_value=job)
         MockRepo.return_value = mock_repo
         svc = JobService(db)
-        result = await svc.update_status(job.id, JobStatus.JD_PARSED, user)
-        mock_repo.update.assert_called_once_with(job, status=JobStatus.JD_PARSED)
+        result = await svc.update_status(
+            job.id, JobStatus.JD_PARSED, user
+        )
+        mock_repo.update.assert_called_once_with(
+            job, status=JobStatus.JD_PARSED
+        )
         assert result is job
 
 
@@ -80,12 +88,26 @@ async def test_update_status_terminal_to_terminal_raises():
 
 
 def test_valid_job_transitions():
-    from app.jobs.models import VALID_JOB_TRANSITIONS, is_valid_job_transition
+    from app.jobs.models import (
+        VALID_JOB_TRANSITIONS,
+        is_valid_job_transition,
+    )
+
     assert is_valid_job_transition(JobStatus.NEW, JobStatus.JD_PARSED)
     assert not is_valid_job_transition(JobStatus.NEW, JobStatus.APPLIED)
-    assert is_valid_job_transition(JobStatus.JD_PARSED, JobStatus.REFERRAL_IN_PROGRESS)
-    assert is_valid_job_transition(JobStatus.JD_PARSED, JobStatus.RESUME_GENERATED)
+    assert is_valid_job_transition(
+        JobStatus.JD_PARSED, JobStatus.REFERRAL_IN_PROGRESS
+    )
+    assert is_valid_job_transition(
+        JobStatus.JD_PARSED, JobStatus.RESUME_GENERATED
+    )
     assert is_valid_job_transition(JobStatus.APPLIED, JobStatus.OA)
-    assert is_valid_job_transition(JobStatus.APPLIED, JobStatus.REJECTED)
-    assert not is_valid_job_transition(JobStatus.REJECTED, JobStatus.APPLIED)
-    assert not is_valid_job_transition(JobStatus.OFFER, JobStatus.INTERVIEW)
+    assert is_valid_job_transition(
+        JobStatus.APPLIED, JobStatus.REJECTED
+    )
+    assert not is_valid_job_transition(
+        JobStatus.REJECTED, JobStatus.APPLIED
+    )
+    assert not is_valid_job_transition(
+        JobStatus.OFFER, JobStatus.INTERVIEW
+    )

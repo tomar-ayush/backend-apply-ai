@@ -55,8 +55,12 @@ class UserService:
     async def get_me(self, user: User) -> UserProfile:
         return self._to_profile(user)
 
-    async def update_me(self, user: User, req: UpdateUserRequest) -> UserProfile:
-        updates = req.model_dump(exclude_none=True, exclude={"llm_api_key"})
+    async def update_me(
+        self, user: User, req: UpdateUserRequest
+    ) -> UserProfile:
+        updates = req.model_dump(
+            exclude_none=True, exclude={"llm_api_key"}
+        )
 
         if req.llm_api_key is not None:
             updates["encrypted_llm_api_key"] = encrypt(req.llm_api_key)

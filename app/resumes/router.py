@@ -18,7 +18,11 @@ from app.resumes.schemas import (
 router = APIRouter()
 
 
-@router.post("/upload-url", response_model=CreateResumeUploadUrlsResponse, status_code=201)
+@router.post(
+    "/upload-url",
+    response_model=CreateResumeUploadUrlsResponse,
+    status_code=201,
+)
 async def create_resume_upload_url(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -30,7 +34,11 @@ async def create_resume_upload_url(
     return await ResumeService(db).create_upload_url(current_user)
 
 
-@router.post("/generate/{job_id}", response_model=GenerateAiResumeResponse, status_code=201)
+@router.post(
+    "/generate/{job_id}",
+    response_model=GenerateAiResumeResponse,
+    status_code=201,
+)
 async def generate_ai_resume(
     job_id: uuid.UUID,
     payload: GenerateAiResumeRequest,
@@ -42,10 +50,16 @@ async def generate_ai_resume(
     The client sends `sections` (e.g. ["summary", "skills", "experience"]) which are
     each rewritten by a dedicated LLM pass, in order, then compiled to PDF.
     """
-    return await ResumeService(db).generate_ai(job_id, payload.sections, current_user)
+    return await ResumeService(db).generate_ai(
+        job_id, payload.sections, current_user
+    )
 
 
-@router.post("/finalize/{resume_type}", response_model=GetResumeDownloadResponse, status_code=201)
+@router.post(
+    "/finalize/{resume_type}",
+    response_model=GetResumeDownloadResponse,
+    status_code=201,
+)
 async def finalize_resume(
     resume_type: Literal["original"],
     current_user: User = Depends(get_current_user),
@@ -56,14 +70,20 @@ async def finalize_resume(
     Call this after the client PUTs the LaTeX to the presigned URL from /upload-url.
     (The AI resume is compiled automatically during /generate, so this is original-only.)
     """
-    return await ResumeService(db).finalize_resume(resume_type, current_user)
+    return await ResumeService(db).finalize_resume(
+        resume_type, current_user
+    )
 
 
-@router.get("/download/{version}", response_model=GetResumeDownloadResponse)
+@router.get(
+    "/download/{version}", response_model=GetResumeDownloadResponse
+)
 async def get_resume_download_url(
     version: Literal["original", "ai"],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return a presigned GET URL to download a stored resume copy."""
-    return await ResumeService(db).get_download_url(current_user, version)
+    return await ResumeService(db).get_download_url(
+        current_user, version
+    )

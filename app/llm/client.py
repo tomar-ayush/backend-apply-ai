@@ -35,6 +35,7 @@ class LLMClient:
         if self.provider == "openai":
             try:
                 from openai import AsyncOpenAI
+
                 return AsyncOpenAI(api_key=self.api_key)
             except ImportError:
                 raise BadRequestError("openai package not installed")
@@ -42,6 +43,7 @@ class LLMClient:
         if self.provider == "anthropic":
             try:
                 import anthropic
+
                 return anthropic.AsyncAnthropic(api_key=self.api_key)
             except ImportError:
                 raise BadRequestError("anthropic package not installed")
@@ -49,13 +51,17 @@ class LLMClient:
         if self.provider == "gemini":
             try:
                 from google import genai
+
                 return genai.Client(api_key=self.api_key)
             except ImportError:
-                raise BadRequestError("google-genai package not installed")
+                raise BadRequestError(
+                    "google-genai package not installed"
+                )
 
         if self.provider == "openrouter":
             try:
                 from openai import AsyncOpenAI
+
                 return AsyncOpenAI(
                     api_key=self.api_key,
                     base_url=OPENROUTER_BASE_URL,
@@ -73,31 +79,62 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> str:
         """
-        Base completion coordinator. 
+        Base completion coordinator.
         Accepts response_schema parameter to enable direct structured model restrictions.
         """
         try:
             if self.provider == "openai":
-                return await self._openai_complete(system, user, model, max_tokens, json_mode, response_schema)
+                return await self._openai_complete(
+                    system,
+                    user,
+                    model,
+                    max_tokens,
+                    json_mode,
+                    response_schema,
+                )
             if self.provider == "anthropic":
-                return await self._anthropic_complete(system, user, model, max_tokens, response_schema)
+                return await self._anthropic_complete(
+                    system, user, model, max_tokens, response_schema
+                )
             if self.provider == "gemini":
-                return await self._gemini_complete(system, user, model, max_tokens, json_mode, response_schema)
+                return await self._gemini_complete(
+                    system,
+                    user,
+                    model,
+                    max_tokens,
+                    json_mode,
+                    response_schema,
+                )
             if self.provider == "openrouter":
                 if not model:
                     raise BadRequestError(
                         "OpenRouter requires an explicit model name (e.g. 'openai/gpt-4o-mini'). "
                         "Provide it from the UI."
                     )
-                return await self._openai_complete(system, user, model, max_tokens, json_mode, response_schema)
+                return await self._openai_complete(
+                    system,
+                    user,
+                    model,
+                    max_tokens,
+                    json_mode,
+                    response_schema,
+                )
         except (ExternalServiceError, BadRequestError):
             raise
         except Exception as e:
-            logger.error("llm_error provider=%s error=%s", self.provider, str(e))
+            logger.error(
+                "llm_error provider=%s error=%s", self.provider, str(e)
+            )
             raise ExternalServiceError("LLM", str(e))
 
     async def _openai_complete(
-        self, system: str, user: str, model: Optional[str], max_tokens: int, json_mode: bool, response_schema: Optional[Type[BaseModel]]
+        self,
+        system: str,
+        user: str,
+        model: Optional[str],
+        max_tokens: int,
+        json_mode: bool,
+        response_schema: Optional[Type[BaseModel]],
     ) -> str:
         model = model or "gpt-4o"
         kwargs: dict = dict(
@@ -108,23 +145,27 @@ class LLMClient:
             ],
             max_tokens=max_tokens,
         )
-        
+
         if response_schema:
             # Native OpenAI Structured Outputs parsing pipeline
             res = await self._client.beta.chat.completions.parse(
-                response_format=response_schema,
-                **kwargs
+                response_format=response_schema, **kwargs
             )
             return res.choices[0].message.content
-        
+
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-            
+
         response = await self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
 
     async def _anthropic_complete(
-        self, system: str, user: str, model: Optional[str], max_tokens: int, response_schema: Optional[Type[BaseModel]]
+        self,
+        system: str,
+        user: str,
+        model: Optional[str],
+        max_tokens: int,
+        response_schema: Optional[Type[BaseModel]],
     ) -> str:
         model = model or "claude-3-5-sonnet-latest"
         kwargs: dict = dict(
@@ -133,20 +174,25 @@ class LLMClient:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        
+
         if response_schema:
             # Native Anthropic Structured Outputs tracking pipeline
             response = await self._client.beta.messages.parse(
-                response_format=response_schema,
-                **kwargs
+                response_format=response_schema, **kwargs
             )
             return response.text
-            
+
         response = await self._client.messages.create(**kwargs)
         return response.content[0].text
 
     async def _gemini_complete(
-        self, system: str, user: str, model: Optional[str], max_tokens: int, json_mode: bool, response_schema: Optional[Type[BaseModel]]
+        self,
+        system: str,
+        user: str,
+        model: Optional[str],
+        max_tokens: int,
+        json_mode: bool,
+        response_schema: Optional[Type[BaseModel]],
     ) -> str:
         from google.genai import types
 
@@ -155,7 +201,7 @@ class LLMClient:
             "system_instruction": system,
             "max_output_tokens": max_tokens,
         }
-        
+
         if response_schema:
             config_args["response_mime_type"] = "application/json"
             config_args["response_schema"] = response_schema
@@ -198,7 +244,10 @@ class LLMClient:
         # underlying models (e.g. tencent/hy3 via Novita) reject the 'json_object'
         # response format too. So for OpenRouter we send NO response_format and rely
         # on the prompt demanding strict JSON, then validate against the schema.
-        use_structured = self.provider != "openrouter" and response_schema is not None
+        use_structured = (
+            self.provider != "openrouter"
+            and response_schema is not None
+        )
         use_json_mode = self.provider != "openrouter"
 
         raw = await self.complete(
@@ -222,13 +271,23 @@ class LLMClient:
             return json.loads(raw)
         except (json.JSONDecodeError, ValidationError) as e:
             if max_retries <= 0:
-                logger.error("llm_json_parse_error provider=%s raw=%s error=%s", self.provider, raw[:200], str(e))
-                raise ExternalServiceError("LLM", f"Response was not structurally valid: {str(e)}")
+                logger.error(
+                    "llm_json_parse_error provider=%s raw=%s error=%s",
+                    self.provider,
+                    raw[:200],
+                    str(e),
+                )
+                raise ExternalServiceError(
+                    "LLM",
+                    f"Response was not structurally valid: {str(e)}",
+                )
 
             # Likely truncated (hit token cap). Ask the model to continue the JSON.
             logger.warning(
                 "llm_json_parse_retry provider=%s attempt_left=%d error=%s",
-                self.provider, max_retries, str(e),
+                self.provider,
+                max_retries,
+                str(e),
             )
             repair_user = (
                 "The previous response was cut off and is not valid JSON. "

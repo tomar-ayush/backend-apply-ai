@@ -11,14 +11,28 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.referrals.models import Referral, ReferralStatus, is_valid_referral_transition
+from app.referrals.models import (
+    Referral,
+    ReferralStatus,
+    is_valid_referral_transition,
+)
 from app.referrals.repository import ReferralRepository
-from app.referrals.schemas import UpdateReferralRequest, GenerateReferralsResponse, ReferralResponse, ReferralSearchSchema
+from app.referrals.schemas import (
+    UpdateReferralRequest,
+    GenerateReferralsResponse,
+    ReferralResponse,
+    ReferralSearchSchema,
+)
 from app.jobs.models import Job
 from app.users.models import User
 from app.job_jd.repository import JobJDRepository
 from app.jobs.repository import JobRepository
-from app.common.exceptions import NotFoundError, InvalidTransitionError, BadRequestError, ForbiddenError
+from app.common.exceptions import (
+    NotFoundError,
+    InvalidTransitionError,
+    BadRequestError,
+    ForbiddenError,
+)
 from app.config import settings
 
 from ddgs import DDGS
@@ -28,13 +42,30 @@ logger = get_logger(__name__)
 
 def _shorten_company_name(company: str) -> str:
     """Return the shortest searchable form — strips legal suffixes and numeric tenant prefixes."""
-    suffixes = sorted([
-        " pvt ltd", " pvt. ltd.", " private limited", " limited",
-        " ltd.", " ltd", " inc.", " inc", " corp.", " corp", " llc", " plc",
-        " & rock technology india pvt ltd", " & rock technology india",
-        " mining & rock technology india", " mining & rock solutions",
-        " mining and rock solutions", " & rock solutions",
-    ], key=len, reverse=True)
+    suffixes = sorted(
+        [
+            " pvt ltd",
+            " pvt. ltd.",
+            " private limited",
+            " limited",
+            " ltd.",
+            " ltd",
+            " inc.",
+            " inc",
+            " corp.",
+            " corp",
+            " llc",
+            " plc",
+            " & rock technology india pvt ltd",
+            " & rock technology india",
+            " mining & rock technology india",
+            " mining & rock solutions",
+            " mining and rock solutions",
+            " & rock solutions",
+        ],
+        key=len,
+        reverse=True,
+    )
     name = company.strip()
     lower = name.lower()
     for suffix in suffixes:
@@ -53,7 +84,9 @@ def _clean_role(role: str) -> str:
     return re.sub(r"\s*\([^)]*\)", "", role).strip()
 
 
-def _build_referral_queries(company: str, role: str, team_signals: dict) -> list[tuple[str, int]]:
+def _build_referral_queries(
+    company: str, role: str, team_signals: dict
+) -> list[tuple[str, int]]:
     """
     Build diverse LinkedIn search queries targeting current employees who could refer.
 
@@ -68,48 +101,116 @@ def _build_referral_queries(company: str, role: str, team_signals: dict) -> list
     tech: list = signals.get("tech_stack") or []
 
     # Extract meaningful function keywords from role, drop generic words
-    _stop = {"graduate", "engineer", "trainee", "senior", "junior", "lead",
-             "associate", "intern", "manager", "analyst", "specialist"}
-    role_kws = [w for w in clean.lower().split() if w not in _stop and len(w) > 3]
+    _stop = {
+        "graduate",
+        "engineer",
+        "trainee",
+        "senior",
+        "junior",
+        "lead",
+        "associate",
+        "intern",
+        "manager",
+        "analyst",
+        "specialist",
+    }
+    role_kws = [
+        w
+        for w in clean.lower().split()
+        if w not in _stop and len(w) > 3
+    ]
 
     # list of (query, priority) — lower number = contact first
     tagged: list[tuple[str, int]] = []
 
-    planning_signals = {"plan", "supply", "demand", "inventory", "logistics", "procurement"}
+    planning_signals = {
+        "plan",
+        "supply",
+        "demand",
+        "inventory",
+        "logistics",
+        "procurement",
+    }
     is_planning = any(k in role.lower() for k in planning_signals)
 
     # --- Priority 1: Manager in the same team/function ---
     for kw in role_kws[:2]:
-        tagged.append((f'site:linkedin.com/in "{short}" "{kw}" manager -jobs', 1))
+        tagged.append(
+            (f'site:linkedin.com/in "{short}" "{kw}" manager -jobs', 1)
+        )
     if is_planning:
-        tagged.append((f'site:linkedin.com/in "{short}" "supply chain" manager -jobs', 1))
-        tagged.append((f'site:linkedin.com/in "{short}" "planning" manager -jobs', 1))
+        tagged.append(
+            (
+                f'site:linkedin.com/in "{short}" "supply chain" manager -jobs',
+                1,
+            )
+        )
+        tagged.append(
+            (
+                f'site:linkedin.com/in "{short}" "planning" manager -jobs',
+                1,
+            )
+        )
 
     # --- Priority 2: Senior / mid-level peers in the same function ---
     for kw in role_kws[:2]:
-        tagged.append((f'site:linkedin.com/in "{short}" "senior {kw}" OR "lead {kw}" -jobs', 2))
+        tagged.append(
+            (
+                f'site:linkedin.com/in "{short}" "senior {kw}" OR "lead {kw}" -jobs',
+                2,
+            )
+        )
     if is_planning:
-        tagged.append((f'site:linkedin.com/in "{short}" "senior" "supply chain" -jobs', 2))
-        tagged.append((f'site:linkedin.com/in "{short}" "demand planning" OR "inventory planning" -jobs', 2))
+        tagged.append(
+            (
+                f'site:linkedin.com/in "{short}" "senior" "supply chain" -jobs',
+                2,
+            )
+        )
+        tagged.append(
+            (
+                f'site:linkedin.com/in "{short}" "demand planning" OR "inventory planning" -jobs',
+                2,
+            )
+        )
 
     # --- Priority 3: Broader same-function pool ---
     for kw in role_kws[:2]:
-        tagged.append((f'site:linkedin.com/in "{short}" "{kw}" -jobs', 3))
-    tagged.append((f'site:linkedin.com/in "{short}" engineer -jobs -recruiter', 3))
+        tagged.append(
+            (f'site:linkedin.com/in "{short}" "{kw}" -jobs', 3)
+        )
+    tagged.append(
+        (f'site:linkedin.com/in "{short}" engineer -jobs -recruiter', 3)
+    )
     if industry and industry not in {"", "none"}:
-        tagged.append((f'site:linkedin.com/in "{short}" "{industry}"', 3))
+        tagged.append(
+            (f'site:linkedin.com/in "{short}" "{industry}"', 3)
+        )
     if tech:
-        tagged.append((f'site:linkedin.com/in "{short}" {tech[0]} -jobs', 3))
+        tagged.append(
+            (f'site:linkedin.com/in "{short}" {tech[0]} -jobs', 3)
+        )
 
     # --- Priority 4: General managers / directors ---
-    tagged.append((f'site:linkedin.com/in "{short}" manager -jobs -recruiter', 4))
-    tagged.append((f'site:linkedin.com/in "{short}" director -jobs -recruiter', 4))
+    tagged.append(
+        (f'site:linkedin.com/in "{short}" manager -jobs -recruiter', 4)
+    )
+    tagged.append(
+        (f'site:linkedin.com/in "{short}" director -jobs -recruiter', 4)
+    )
 
     # --- Priority 5: HR / Recruiter ---
-    tagged.append((f'site:linkedin.com/in "{short}" "talent acquisition" OR recruiter', 5))
+    tagged.append(
+        (
+            f'site:linkedin.com/in "{short}" "talent acquisition" OR recruiter',
+            5,
+        )
+    )
 
     # --- Priority 5: Broad fallback without site: ---
-    tagged.append((f'linkedin.com/in "{short}" {clean} -job -"job posting"', 5))
+    tagged.append(
+        (f'linkedin.com/in "{short}" {clean} -job -"job posting"', 5)
+    )
 
     seen: set[str] = set()
     deduped: list[tuple[str, int]] = []
@@ -161,11 +262,23 @@ def _extract_linkedin_candidates(items) -> list[dict]:
         if "linkedin.com/in/" not in link:
             continue
         title = item.get("title", "")
-        name = title.split(" - ")[0].strip() if " - " in title else title.strip()
+        name = (
+            title.split(" - ")[0].strip()
+            if " - " in title
+            else title.strip()
+        )
         # Reject obvious non-person titles
-        if not name or any(bad in name.lower() for bad in ("job", "posting", "position", "opening")):
+        if not name or any(
+            bad in name.lower()
+            for bad in ("job", "posting", "position", "opening")
+        ):
             continue
-        candidates.append({"name": name, "linkedin_url": _normalize_linkedin_url(link)})
+        candidates.append(
+            {
+                "name": name,
+                "linkedin_url": _normalize_linkedin_url(link),
+            }
+        )
     return candidates
 
 
@@ -174,15 +287,21 @@ class ReferralService:
         self.db = db
         self.repo = ReferralRepository(db)
 
-    async def generate(self, job: Job, user: User) -> GenerateReferralsResponse:
+    async def generate(
+        self, job: Job, user: User
+    ) -> GenerateReferralsResponse:
         jd_repo = JobJDRepository(self.db)
         jd = await jd_repo.get_by_job_id(job.id)
         if jd is None:
-            raise BadRequestError("Job JD must be parsed before generating referrals")
+            raise BadRequestError(
+                "Job JD must be parsed before generating referrals"
+            )
 
         company = job.company
         if not company or company == "PlaceHolder":
-            raise BadRequestError("Company name must be available in the job record to generate referrals")
+            raise BadRequestError(
+                "Company name must be available in the job record to generate referrals"
+            )
 
         role = job.role or "Engineer"
         team_signals = jd.team_signals or {}
@@ -190,9 +309,17 @@ class ReferralService:
         queries = _build_referral_queries(company, role, team_signals)
         logger.info(
             "referral_generation_start job_id=%s company=%s short_company=%s role=%s queries=%d",
-            str(job.id), company, _shorten_company_name(company), role, len(queries),
+            str(job.id),
+            company,
+            _shorten_company_name(company),
+            role,
+            len(queries),
         )
-        logger.info("referral_queries job_id=%s queries=%s", str(job.id), [q for q, _ in queries])
+        logger.info(
+            "referral_queries job_id=%s queries=%s",
+            str(job.id),
+            [q for q, _ in queries],
+        )
 
         candidates: list[dict] = []
         seen_urls: set[str] = set()
@@ -200,23 +327,41 @@ class ReferralService:
 
         for index, (query, priority) in enumerate(queries):
             try:
-                items = list(ddgs_client.text(query=query, max_results=10) or [])
-                logger.info("ddgs_results query_index=%d priority=%d results=%d", index, priority, len(items))
+                items = list(
+                    ddgs_client.text(query=query, max_results=10) or []
+                )
+                logger.info(
+                    "ddgs_results query_index=%d priority=%d results=%d",
+                    index,
+                    priority,
+                    len(items),
+                )
                 for c in _extract_linkedin_candidates(items):
                     if c["linkedin_url"] not in seen_urls:
                         seen_urls.add(c["linkedin_url"])
                         candidates.append({**c, "priority": priority})
             except Exception as e:
-                logger.error("ddgs_query_failed index=%d query=%s error=%s", index, query, str(e))
+                logger.error(
+                    "ddgs_query_failed index=%d query=%s error=%s",
+                    index,
+                    query,
+                    str(e),
+                )
                 continue
 
             if index < len(queries) - 1:
                 await asyncio.sleep(random.uniform(2.5, 6.5))
 
-        logger.info("referral_candidates_found job_id=%s count=%d", str(job.id), len(candidates))
+        logger.info(
+            "referral_candidates_found job_id=%s count=%d",
+            str(job.id),
+            len(candidates),
+        )
 
         if not candidates:
-            logger.warning("no_referral_candidates job_id=%s", str(job.id))
+            logger.warning(
+                "no_referral_candidates job_id=%s", str(job.id)
+            )
             return GenerateReferralsResponse(generated=0, referrals=[])
 
         records = [
@@ -229,44 +374,77 @@ class ReferralService:
             for c in candidates
         ]
         referrals = await self.repo.create_many(records)
-        logger.info("referrals_generated job_id=%s count=%s", str(job.id), len(referrals))
+        logger.info(
+            "referrals_generated job_id=%s count=%s",
+            str(job.id),
+            len(referrals),
+        )
 
         return GenerateReferralsResponse(
             generated=len(referrals),
-            referrals=[ReferralResponse.model_validate(r) for r in referrals],
+            referrals=[
+                ReferralResponse.model_validate(r) for r in referrals
+            ],
         )
 
     async def list_by_job(self, job_id: uuid.UUID) -> List[Referral]:
         return await self.repo.list_by_job(job_id)
 
-    async def _get_and_assert_ownership(self, referral_id: uuid.UUID, user: User) -> Referral:
+    async def _get_and_assert_ownership(
+        self, referral_id: uuid.UUID, user: User
+    ) -> Referral:
         referral = await self.repo.get_by_id(referral_id)
         if referral is None:
             raise NotFoundError("Referral", str(referral_id))
         job = await JobRepository(self.db).get_by_id(referral.job_id)
         if job is None or job.user_id != user.id:
-            raise ForbiddenError("You do not have access to this referral")
+            raise ForbiddenError(
+                "You do not have access to this referral"
+            )
         return referral
 
-    async def update(self, referral_id: uuid.UUID, req: UpdateReferralRequest, user: User) -> Referral:
-        referral = await self._get_and_assert_ownership(referral_id, user)
+    async def update(
+        self,
+        referral_id: uuid.UUID,
+        req: UpdateReferralRequest,
+        user: User,
+    ) -> Referral:
+        referral = await self._get_and_assert_ownership(
+            referral_id, user
+        )
 
-        if not is_valid_referral_transition(referral.status, req.status):
-            raise InvalidTransitionError(referral.status.value, req.status.value)
+        if not is_valid_referral_transition(
+            referral.status, req.status
+        ):
+            raise InvalidTransitionError(
+                referral.status.value, req.status.value
+            )
 
         updates: dict = {"status": req.status}
         if req.linkedin_url is not None:
-            updates["linkedin_url"] = _normalize_linkedin_url(req.linkedin_url)
+            updates["linkedin_url"] = _normalize_linkedin_url(
+                req.linkedin_url
+            )
 
         now = datetime.now(timezone.utc)
         if req.status == ReferralStatus.REQUESTED:
             updates["asked_at"] = now
-        elif req.status in (ReferralStatus.RESPONDED, ReferralStatus.REFERRED, ReferralStatus.DECLINED):
+        elif req.status in (
+            ReferralStatus.RESPONDED,
+            ReferralStatus.REFERRED,
+            ReferralStatus.DECLINED,
+        ):
             updates["responded_at"] = now
 
         return await self.repo.update(referral, **updates)
 
     async def delete(self, referral_id: uuid.UUID, user: User) -> None:
-        referral = await self._get_and_assert_ownership(referral_id, user)
+        referral = await self._get_and_assert_ownership(
+            referral_id, user
+        )
         await self.repo.delete(referral)
-        logger.info("referral_deleted referral_id=%s user_id=%s", str(referral_id), str(user.id))
+        logger.info(
+            "referral_deleted referral_id=%s user_id=%s",
+            str(referral_id),
+            str(user.id),
+        )

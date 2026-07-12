@@ -35,21 +35,35 @@ app.add_middleware(
 
 
 @app.exception_handler(AppException)
-async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
-    logger.warning("app_exception status_code=%s detail=%s", exc.status_code, exc.detail)
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+async def app_exception_handler(
+    request: Request, exc: AppException
+) -> JSONResponse:
+    logger.warning(
+        "app_exception status_code=%s detail=%s",
+        exc.status_code,
+        exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code, content={"detail": exc.detail}
+    )
 
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+async def unhandled_exception_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
     logger.exception("unhandled_exception %s", str(exc))
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(
+        status_code=500, content={"detail": "Internal server error"}
+    )
 
 
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(users_router, prefix="/users", tags=["users"])
 app.include_router(jobs_router, prefix="/jobs", tags=["jobs"])
-app.include_router(referrals_router, prefix="/referrals", tags=["referrals"])
+app.include_router(
+    referrals_router, prefix="/referrals", tags=["referrals"]
+)
 app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 app.include_router(resumes_router, prefix="/resumes", tags=["resumes"])
 

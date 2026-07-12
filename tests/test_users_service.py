@@ -27,14 +27,18 @@ async def test_get_me_has_llm_key_flag():
 async def test_update_me_encrypts_api_key():
     user = make_user()
     db = AsyncMock()
-    req = UpdateUserRequest(llm_provider="openai", llm_api_key="sk-test-key")
+    req = UpdateUserRequest(
+        llm_provider="openai", llm_api_key="sk-test-key"
+    )
 
     with patch("app.users.service.UserRepository") as MockRepo:
         mock_repo = AsyncMock()
-        mock_repo.update = AsyncMock(return_value=make_user(
-            llm_provider="openai",
-            encrypted_llm_api_key="encrypted",
-        ))
+        mock_repo.update = AsyncMock(
+            return_value=make_user(
+                llm_provider="openai",
+                encrypted_llm_api_key="encrypted",
+            )
+        )
         MockRepo.return_value = mock_repo
         svc = UserService(db=db)
         profile = await svc.update_me(user, req)

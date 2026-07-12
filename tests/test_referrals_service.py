@@ -11,12 +11,25 @@ from tests.conftest import make_user, make_referral, make_job
 
 def test_valid_referral_transitions():
     from app.referrals.models import is_valid_referral_transition
-    assert is_valid_referral_transition(ReferralStatus.NOT_CONTACTED, ReferralStatus.REQUESTED)
-    assert not is_valid_referral_transition(ReferralStatus.NOT_CONTACTED, ReferralStatus.REFERRED)
-    assert is_valid_referral_transition(ReferralStatus.REQUESTED, ReferralStatus.RESPONDED)
-    assert is_valid_referral_transition(ReferralStatus.REQUESTED, ReferralStatus.DECLINED)
-    assert not is_valid_referral_transition(ReferralStatus.REFERRED, ReferralStatus.REQUESTED)
-    assert not is_valid_referral_transition(ReferralStatus.DECLINED, ReferralStatus.RESPONDED)
+
+    assert is_valid_referral_transition(
+        ReferralStatus.NOT_CONTACTED, ReferralStatus.REQUESTED
+    )
+    assert not is_valid_referral_transition(
+        ReferralStatus.NOT_CONTACTED, ReferralStatus.REFERRED
+    )
+    assert is_valid_referral_transition(
+        ReferralStatus.REQUESTED, ReferralStatus.RESPONDED
+    )
+    assert is_valid_referral_transition(
+        ReferralStatus.REQUESTED, ReferralStatus.DECLINED
+    )
+    assert not is_valid_referral_transition(
+        ReferralStatus.REFERRED, ReferralStatus.REQUESTED
+    )
+    assert not is_valid_referral_transition(
+        ReferralStatus.DECLINED, ReferralStatus.RESPONDED
+    )
 
 
 @pytest.mark.asyncio
@@ -38,13 +51,17 @@ async def test_update_referral_invalid_transition():
     db = AsyncMock()
     user = make_user()
     referral = make_referral(status=ReferralStatus.DECLINED)
-    with patch("app.referrals.service.ReferralRepository") as MockRepo, \
-         patch("app.referrals.service.JobRepository") as MockJobRepo:
+    with (
+        patch("app.referrals.service.ReferralRepository") as MockRepo,
+        patch("app.referrals.service.JobRepository") as MockJobRepo,
+    ):
         mock_repo = AsyncMock()
         mock_repo.get_by_id = AsyncMock(return_value=referral)
         MockRepo.return_value = mock_repo
         mock_job_repo = AsyncMock()
-        mock_job_repo.get_by_id = AsyncMock(return_value=make_job(user_id=user.id))
+        mock_job_repo.get_by_id = AsyncMock(
+            return_value=make_job(user_id=user.id)
+        )
         MockJobRepo.return_value = mock_job_repo
         svc = ReferralService(db)
         req = UpdateReferralRequest(status=ReferralStatus.REQUESTED)
@@ -58,14 +75,18 @@ async def test_update_referral_sets_asked_at():
     user = make_user()
     referral = make_referral(status=ReferralStatus.NOT_CONTACTED)
     updated = make_referral(status=ReferralStatus.REQUESTED)
-    with patch("app.referrals.service.ReferralRepository") as MockRepo, \
-         patch("app.referrals.service.JobRepository") as MockJobRepo:
+    with (
+        patch("app.referrals.service.ReferralRepository") as MockRepo,
+        patch("app.referrals.service.JobRepository") as MockJobRepo,
+    ):
         mock_repo = AsyncMock()
         mock_repo.get_by_id = AsyncMock(return_value=referral)
         mock_repo.update = AsyncMock(return_value=updated)
         MockRepo.return_value = mock_repo
         mock_job_repo = AsyncMock()
-        mock_job_repo.get_by_id = AsyncMock(return_value=make_job(user_id=user.id))
+        mock_job_repo.get_by_id = AsyncMock(
+            return_value=make_job(user_id=user.id)
+        )
         MockJobRepo.return_value = mock_job_repo
         svc = ReferralService(db)
         req = UpdateReferralRequest(status=ReferralStatus.REQUESTED)

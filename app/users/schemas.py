@@ -4,7 +4,14 @@ from typing import Optional, Any, Dict, Literal
 
 from pydantic import BaseModel, EmailStr, field_validator
 
-SUPPORTED_LLM_PROVIDERS = {"openai", "anthropic", "claude", "gemini", "google", "openrouter"}
+SUPPORTED_LLM_PROVIDERS = {
+    "openai",
+    "anthropic",
+    "claude",
+    "gemini",
+    "google",
+    "openrouter",
+}
 
 
 class UserProfile(BaseModel):

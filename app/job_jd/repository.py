@@ -11,8 +11,12 @@ class JobJDRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_by_job_id(self, job_id: str | uuid.UUID) -> Optional[JobJD]:
-        result = await self.db.execute(select(JobJD).where(JobJD.job_id == job_id))
+    async def get_by_job_id(
+        self, job_id: str | uuid.UUID
+    ) -> Optional[JobJD]:
+        result = await self.db.execute(
+            select(JobJD).where(JobJD.job_id == job_id)
+        )
         return result.scalar_one_or_none()
 
     async def create(self, **kwargs) -> JobJD:

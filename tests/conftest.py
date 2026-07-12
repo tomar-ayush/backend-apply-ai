@@ -46,6 +46,7 @@ def make_user(**kwargs):
 
 def make_job(**kwargs):
     from app.jobs.models import JobStatus
+
     defaults = dict(
         id=uuid.uuid4(),
         user_id=uuid.uuid4(),
@@ -67,6 +68,7 @@ def make_job(**kwargs):
 
 def make_referral(**kwargs):
     from app.referrals.models import ReferralStatus
+
     defaults = dict(
         id=uuid.uuid4(),
         job_id=uuid.uuid4(),
@@ -87,6 +89,7 @@ def make_referral(**kwargs):
 
 def make_task(**kwargs):
     from app.tasks.models import TaskStatus, TaskType
+
     defaults = dict(
         id=uuid.uuid4(),
         job_id=uuid.uuid4(),

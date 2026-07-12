@@ -15,7 +15,9 @@ class CreateJobRequest(BaseModel):
     @classmethod
     def validate_url(cls, v: str) -> str:
         if not v.startswith(("http://", "https://")):
-            raise ValueError("workday_url must be a valid HTTP/HTTPS URL")
+            raise ValueError(
+                "workday_url must be a valid HTTP/HTTPS URL"
+            )
         return v
 
 
@@ -44,7 +46,9 @@ class JobDetailResponse(JobResponse):
     workday_job_id: Optional[str] = None
 
     @classmethod
-    def from_job(cls, job: Any, jd: Optional[Any] = None) -> "JobDetailResponse":
+    def from_job(
+        cls, job: Any, jd: Optional[Any] = None
+    ) -> "JobDetailResponse":
         detail = cls.model_validate(job)
         if jd is not None:
             detail.company = jd.company

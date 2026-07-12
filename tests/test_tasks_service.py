@@ -5,20 +5,41 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.tasks.models import TaskStatus, TaskType
 from app.tasks.schemas import CreateTaskRequest, UpdateTaskRequest
 from app.tasks.service import TaskService
-from app.common.exceptions import InvalidTransitionError, NotFoundError, ForbiddenError
+from app.common.exceptions import (
+    InvalidTransitionError,
+    NotFoundError,
+    ForbiddenError,
+)
 from tests.conftest import make_user, make_job, make_task
 
 
 def test_valid_task_transitions():
     from app.tasks.models import is_valid_task_transition
-    assert is_valid_task_transition(TaskStatus.QUEUED, TaskStatus.RUNNING)
-    assert is_valid_task_transition(TaskStatus.QUEUED, TaskStatus.FAILED)
-    assert is_valid_task_transition(TaskStatus.RUNNING, TaskStatus.COMPLETED)
-    assert is_valid_task_transition(TaskStatus.RUNNING, TaskStatus.WAITING_USER)
-    assert is_valid_task_transition(TaskStatus.WAITING_USER, TaskStatus.RUNNING)
-    assert not is_valid_task_transition(TaskStatus.COMPLETED, TaskStatus.RUNNING)
-    assert not is_valid_task_transition(TaskStatus.FAILED, TaskStatus.RUNNING)
-    assert not is_valid_task_transition(TaskStatus.QUEUED, TaskStatus.COMPLETED)
+
+    assert is_valid_task_transition(
+        TaskStatus.QUEUED, TaskStatus.RUNNING
+    )
+    assert is_valid_task_transition(
+        TaskStatus.QUEUED, TaskStatus.FAILED
+    )
+    assert is_valid_task_transition(
+        TaskStatus.RUNNING, TaskStatus.COMPLETED
+    )
+    assert is_valid_task_transition(
+        TaskStatus.RUNNING, TaskStatus.WAITING_USER
+    )
+    assert is_valid_task_transition(
+        TaskStatus.WAITING_USER, TaskStatus.RUNNING
+    )
+    assert not is_valid_task_transition(
+        TaskStatus.COMPLETED, TaskStatus.RUNNING
+    )
+    assert not is_valid_task_transition(
+        TaskStatus.FAILED, TaskStatus.RUNNING
+    )
+    assert not is_valid_task_transition(
+        TaskStatus.QUEUED, TaskStatus.COMPLETED
+    )
 
 
 @pytest.mark.asyncio

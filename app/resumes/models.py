@@ -23,7 +23,9 @@ class LatexPackageUsage(Base):
     package_name: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
     )
-    download_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    download_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     last_used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

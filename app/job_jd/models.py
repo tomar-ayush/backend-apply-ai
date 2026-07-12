@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, JSON, ForeignKey, DateTime, func, ARRAY
+from sqlalchemy import (
+    String,
+    Text,
+    JSON,
+    ForeignKey,
+    DateTime,
+    func,
+    ARRAY,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -31,7 +39,9 @@ class JobJD(Base):
     keywords: Mapped[Optional[dict]] = mapped_column(JSON)
     team_signals: Mapped[Optional[dict]] = mapped_column(JSON)
     llm_summary: Mapped[Optional[str]] = mapped_column(Text)
-    learning: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    learning: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

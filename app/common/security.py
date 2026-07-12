@@ -38,14 +38,22 @@ def decrypt(token: str) -> str:
 
 
 def create_access_token(subject: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     payload = {"sub": subject, "exp": expire}
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(
+        payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+    )
 
 
 def decode_access_token(token: str) -> str:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
         subject: Optional[str] = payload.get("sub")
         if subject is None:
             raise UnauthorizedError("Invalid token payload")
@@ -56,14 +64,25 @@ def decode_access_token(token: str) -> str:
 
 def create_callback_token(task_id: str, expire_hours: int = 1) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
-    payload = {"sub": task_id, "purpose": "agent_callback", "exp": expire}
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    payload = {
+        "sub": task_id,
+        "purpose": "agent_callback",
+        "exp": expire,
+    }
+    return jwt.encode(
+        payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+    )
 
 
 def verify_callback_token(token: str) -> str:
     from app.common.exceptions import ForbiddenError
+
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
         if payload.get("purpose") != "agent_callback":
             raise ForbiddenError("Invalid callback token")
         task_id: Optional[str] = payload.get("sub")

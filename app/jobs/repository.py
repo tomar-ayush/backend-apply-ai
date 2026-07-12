@@ -14,9 +14,10 @@ class JobRepository:
         self.db = db
 
     async def get_by_id(self, job_id: str | uuid.UUID) -> Optional[Job]:
-        result = await self.db.execute(select(Job).where(Job.id == job_id))
+        result = await self.db.execute(
+            select(Job).where(Job.id == job_id)
+        )
         return result.scalar_one_or_none()
-
 
     async def get_by_id_and_user(
         self, job_id: str | uuid.UUID, user_id: str | uuid.UUID
@@ -36,7 +37,11 @@ class JobRepository:
         q = select(Job).where(Job.user_id == user_id)
         if status:
             q = q.where(Job.status == status)
-        q = q.order_by(Job.created_at.desc()).limit(limit).offset(offset)
+        q = (
+            q.order_by(Job.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         result = await self.db.execute(q)
         return list(result.scalars().all())
 
@@ -56,15 +61,26 @@ class JobRepository:
         )
         if status:
             q = q.where(Job.status == status)
-        q = q.order_by(Job.created_at.desc()).limit(limit).offset(offset)
+        q = (
+            q.order_by(Job.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         result = await self.db.execute(q)
         return [(row[0], row[1]) for row in result.all()]
 
     async def count_by_user(
-        self, user_id: str | uuid.UUID, status: Optional[JobStatus] = None
+        self,
+        user_id: str | uuid.UUID,
+        status: Optional[JobStatus] = None,
     ) -> int:
         from sqlalchemy import func
-        q = select(func.count()).select_from(Job).where(Job.user_id == user_id)
+
+        q = (
+            select(func.count())
+            .select_from(Job)
+            .where(Job.user_id == user_id)
+        )
         if status:
             q = q.where(Job.status == status)
         result = await self.db.execute(q)
