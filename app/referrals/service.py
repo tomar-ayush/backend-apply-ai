@@ -3,7 +3,7 @@ import uuid
 import json
 from app.common.logging import get_logger
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 import asyncio
 import random
 from urllib.parse import urlparse, urlunparse
@@ -325,7 +325,11 @@ class ReferralService:
         seen_urls: set[str] = set()
         ddgs_client = DDGS()
 
+        MAX_REFERRALS = 10
+
         for index, (query, priority) in enumerate(queries):
+            if len(candidates) >= MAX_REFERRALS:
+                break
             try:
                 items = list(
                     ddgs_client.text(query=query, max_results=10) or []
@@ -340,6 +344,8 @@ class ReferralService:
                     if c["linkedin_url"] not in seen_urls:
                         seen_urls.add(c["linkedin_url"])
                         candidates.append({**c, "priority": priority})
+                        if len(candidates) >= MAX_REFERRALS:
+                            break
             except Exception as e:
                 logger.error(
                     "ddgs_query_failed index=%d query=%s error=%s",
@@ -387,8 +393,22 @@ class ReferralService:
             ],
         )
 
-    async def list_by_job(self, job_id: uuid.UUID) -> List[Referral]:
-        return await self.repo.list_by_job(job_id)
+    async def list_by_job(
+        self,
+        job_id: uuid.UUID,
+        order_by: Optional[str] = "priority",
+        descending: bool = False,
+    ) -> List[Referral]:
+        """List referrals for a job, sorted by the requested column.
+
+        Defaults to priority ascending (most referable first). `order_by` and
+        `descending` are passed through to the repository so callers can sort
+        by any Referral column (e.g. "name", "created_at") without breaking
+        existing callers.
+        """
+        return await self.repo.list_by_job(
+            job_id, order_by=order_by, descending=descending
+        )
 
     async def _get_and_assert_ownership(
         self, referral_id: uuid.UUID, user: User
