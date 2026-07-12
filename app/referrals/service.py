@@ -297,13 +297,13 @@ class ReferralService:
                 "Job JD must be parsed before generating referrals"
             )
 
-        company = job.company
-        if not company or company == "PlaceHolder":
+        company = jd.company
+        if not company:
             raise BadRequestError(
                 "Company name must be available in the job record to generate referrals"
             )
 
-        role = job.role or "Engineer"
+        role = jd.role
         team_signals = jd.team_signals or {}
 
         queries = _build_referral_queries(company, role, team_signals)
