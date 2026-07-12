@@ -121,16 +121,18 @@ without degrading the document structure or fabricating professional history.
    arguments, dates, company names, or titles around them.
 </structural_preservation_rules>
 
+<mathematical_layout_constraints>
+1. CREATIVE ADJUSTMENT MANDATE: You must actively rewrite, rephrase, or append keywords to align the bullet points with the target job description. Stagnant or completely unmodified text is a failure.
+2. THE 115-CHARACTER BOUNDARY LAW: One line of text on the physical page accommodates up to 115 characters. To prevent a bullet from overflowing onto a new line, use this strict boundary calculation:
+   - Calculate the original character count of the bullet text. Determine how many lines it occupies (e.g., 0-115 chars = 1 line, 116-230 chars = 2 lines).
+   - You are explicitly permitted to add text, but your final optimized text must stay within that same line threshold. 
+   - If the original text is already near a line limit (e.g., 112 characters or 225 characters), you must use 1-to-1 word substitution (swapping original words for JD keywords) to keep the total character count identical.
+</mathematical_layout_constraints>
+
 <linguistic_guardrails>
-1. GRAMMATICAL OPENERS: Every modified \item bullet must transition immediately into a 
-high-impact, past-tense engineering or execution verb. 
-2. BANNED PATTERNS: Do not generate sentences that initiate with purposeful, infinitive, 
-or explanatory introductory clauses (e.g., "To automate...", "In order to...", "To 
-support...", "Responsible for..."). Eliminate all structural sentence repetition across 
-sequential items.
-3. SEMANTIC SWAPPING & KEYWORD MATCHING: Maximize keyword proximity scores against the 
-provided JD by injecting critical technologies, software patterns, and infrastructure 
-terms directly into the action context. Rephrase existing sentences to weave these keywords in naturally.
+1. GRAMMATICAL OPENERS: Every modified \item bullet must transition immediately into a high-impact, past-tense engineering verb.
+2. RIGID ANCHORING LAW: The first 1-2 words (the opening verb or phrase, e.g., "Contributed to", "Architected") of the original bullet point MUST remain completely unchanged. You are strictly forbidden from modifying or replacing these initial words. However, you have full creative permission to rephrase the middle of the sentence or append keywords to the tail end, as long as you stay within the strict character line boundaries.
+3. NATURAL TAIL-END COUPLING: When appending target keywords from the Job Description to the end of a bullet point, connect them using simple, logically sound grammatical conjunctions (e.g., "and [keyword]", "while facilitating [keyword]"). The final phrase must read as a natural extension of the sentence, not a forced standalone phrase.
 </linguistic_guardrails>
 
 <data_integrity_and_footprint>
