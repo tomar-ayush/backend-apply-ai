@@ -1,14 +1,16 @@
 JD_PARSE_SYSTEM = """You are an expert system that extracts structured data from raw job descriptions for an Applicant Tracking System (ATS) AND prepares interview-preparation material.
 
 Extraction rules:
-1. Extract 'workday_job_id' if visible (pattern like R00XXXXX).
+1. 
 2. Differentiate clearly between 'required' skills (must-haves) and 'preferred' skills (nice-to-haves).
 3. Identify implicit technical keywords that help an applicant surface in an ATS index.
 4. Normalize 'work_style' to exactly one of "remote"/"hybrid"/"onsite"/null.
 
 Interview questions / learning rule (field `learning`):
+- If you have the info make a search with your trained database like company role asked questions. If you dont have this info based on keywords like language name or technology name give general important topic suggestions.
 - A SINGLE object mapping a topic name -> a list of questions, e.g.
   {"python": ["diff between static, class and instance methods"], "kafka": ["what are partitions"], "system design": ["design a rate limiter for 1M req/s"]}.
+- We are not targeting here user questions. we are hot here to let user know all the concepts. just give him some basic and relevant concepts that are expected from him like if python role generaters. if javascript role eventloop and all that basic things.
 - Generate ONLY genuinely challenging, frequently-asked interview questions that a strong candidate for THIS role would actually face. NO basic, trivial, or random filler questions.
 - Each topic should contain 2-5 sharp, specific questions. Do NOT use separate keys for questions vs topics — everything goes under `learning`."""
 
@@ -28,60 +30,7 @@ Return ONLY a single valid JSON object (no markdown, no code fences) with exactl
 {raw_text}
 --- END OF JOB DESCRIPTION ---"""
 
-RESUME_OPTIMIZE_SYSTEM = """You are an expert resume writer specializing in ATS optimization.
-Your task is to rewrite bullet points in a LaTeX resume to better match a job description.
-Rules:
-1. ONLY modify bullet point content (\\item lines)
-2. NEVER change LaTeX structure, commands, or formatting
-3. Incorporate keywords naturally - do not keyword-stuff
-4. Keep bullet points concise and achievement-focused
-5. Use strong action verbs
-6. Return ONLY the modified LaTeX, no explanations"""
-
-RESUME_OPTIMIZE_USER = """Job Description Summary:
-{jd_summary}
-
-Required Skills: {required_skills}
-Keywords: {keywords}
-
-Original LaTeX Resume:
-{latex_content}
-
-Rewrite ONLY the \\item bullet points to better match this job description while preserving all LaTeX structure."""
-
-RESUME_SUMMARY_OPTIMIZE_SYSTEM = """You are an expert resume writer specializing in ATS (Applicant Tracking System) optimization.
-Your task is to rewrite ONLY the professional summary section of a LaTeX resume to better match a job description.
-Rules:
-1. Identify the professional summary section (commonly a \\section*{Summary}, \\\\section{Summary}, or the opening paragraph before experience).
-2. Rewrite ONLY that summary text to be more ATS-friendly: weave in relevant keywords naturally, lead with strongest qualifications, keep it concise (3-5 sentences).
-3. NEVER change LaTeX structure, commands, or formatting outside the summary text.
-4. Do NOT modify \\item bullet points, experience, education, or skills sections.
-5. Return ONLY the full modified LaTeX document, no explanations."""
-
-RESUME_SUMMARY_OPTIMIZE_USER = """Job Description Summary:
-{jd_summary}
-
-Required Skills: {required_skills}
-Keywords: {keywords}
-
-Original LaTeX Resume:
-{latex_content}
-
-Rewrite ONLY the professional summary section to be more ATS-friendly while preserving all other LaTeX structure."""
-
-REFERRAL_SEARCH_SYSTEM = """You are an elite talent acquisition and sourcing intelligence assistant. Your task is to generate advanced X-ray search engine strings (such as Google/DuckDuckGo syntax operators) to uncover professional employee footprints on LinkedIn.
-When generating target queries, combine these technical operators strategically:
-1. Target the specific professional platform domain using 'site:linkedin.com/in' or 'site:linkedin.com/pub'.
-2. Isolate current roles by appending state modifiers like '"present"' or '"current"'.
-3. Always exclude irrelevant hiring infrastructure pages by attaching negative operators like '-jobs' or '-recruitment' if necessary.
-4. Keep queries compact, targeted, and directly focused on execution stability.
-"""
-
-REFERRAL_SEARCH_USER = """Generate exactly 5 advanced X-ray search queries to pinpoint current professionals working at {company} within or closely related to the {team_or_role} domain."""
-
-
-
-############ RESUME PRORMPTS NEW 
+############ RESUME PRORMPTS ############
 
 SKILLS_SECTION_SYSTEM = r"""
 You are a resume skills optimizer. Your job: add new skills if they are in requirements of the job description.
@@ -103,6 +52,7 @@ Example output format:
 \end{itemize}
 """
 
+
 SKILLS_SECTION_USER = r"""
 CURRENT SKILLS LATEX: {skills_latex}
 
@@ -115,6 +65,7 @@ change the \item contents; keep the heading, structure, and total length close
 to the original so the resume does not overflow onto an extra page.
 Output ONLY the LaTeX.
 """
+
 
 PROFESSIONAL_SUMMARY_SECTION_SYSTEM = r"""
 You are a resume summary optimizer. Your job: rewrite the professional
@@ -139,6 +90,7 @@ optimization. Led cross-functional teams delivering high-availability
 systems serving 1M+ users.
 """
 
+
 PROFESSIONAL_SUMMARY_SECTION_USER = r"""
 CURRENT SUMMARY LATEX: {current_summary_latex}
 
@@ -151,24 +103,54 @@ lines) so the resume does not overflow onto an extra page.
 Output ONLY the LaTeX snippet.
 """
 
-WORK_EXPERIENCE_SECTION_SYSTEM = r"""
-You are a work experience optimizer. Your job: rewrite bullet points to
-match JD language without fabricating achievements.
 
-CRITICAL RULES (do not violate):
-1. You MUST preserve the user's EXACT LaTeX wrapper commands and structure.
+WORK_EXPERIENCE_SECTION_SYSTEM = r"""
+You are an advanced Application Tracking System (ATS) Semantic Optimization Engine 
+and Technical Recruiter. Your role is to strategically adapt the text within the 
+provided work experience block to achieve alignment with a Target Job Description (JD) 
+without degrading the document structure or fabricating professional history.
+
+<structural_preservation_rules>
+1. WRAPPER COMMAND INVARIANCE: You MUST STRICTLY preserve the user's EXACT LaTeX wrapper commands and structure.
    If the block uses custom commands like \resumeSubheading{{title}}{{subtitle}},
    \resumeSubHeadingListStart / \resumeSubHeadingListEnd, or any custom
    environment, you MUST keep those commands IDENTICAL. Do NOT replace them
    with \section{{...}} or \textbf{{...}} \hfill ... -- that breaks compilation.
-2. Only rewrite the TEXT INSIDE \item bullets. Never change the commands,
+2. SCOPE OF MODIFICATION: Apply text alterations EXCLUSIVELY to the plain text payload found 
+   directly inside individual \item macros. and never change the commands,
    arguments, dates, company names, or titles around them.
-3. Use CAR framework (Challenge-Action-Result) and inject TIER 1 JD keywords
-   naturally into the bullet text.
-4. Do NOT add false achievements or fabricate metrics.
-5. Keep total length close to the original so the resume does not overflow.
-6. Output ONLY the complete LaTeX block you were given, with only the \item
-   bullet text rephrased.
+</structural_preservation_rules>
+
+<linguistic_guardrails>
+1. GRAMMATICAL OPENERS: Every modified \item bullet must transition immediately into a 
+high-impact, past-tense engineering or execution verb. 
+2. BANNED PATTERNS: Do not generate sentences that initiate with purposeful, infinitive, 
+or explanatory introductory clauses (e.g., "To automate...", "In order to...", "To 
+support...", "Responsible for..."). Eliminate all structural sentence repetition across 
+sequential items.
+3. SEMANTIC SWAPPING & KEYWORD MATCHING: Maximize keyword proximity scores against the 
+provided JD by injecting critical technologies, software patterns, and infrastructure 
+terms directly into the action context. Rephrase existing sentences to weave these keywords in naturally.
+</linguistic_guardrails>
+
+<data_integrity_and_footprint>
+1. METRIC PINNING: If an item contains quantitative metrics, percentages, sizes, or 
+timelines, you must retain them exactly as written. Never invent, extrapolate, or inject 
+fake numerical milestones.
+2. QUALITATIVE FALLBACK: For items entirely lacking numerical data, close the statement by 
+defining a concrete architectural or operational outcome (e.g., optimizing developer 
+velocity, reducing maintenance overhead, preventing state divergence) using standard 
+industry terms without empty hyperbole.
+3. FOOTPRINT BUDGET: The modified text block must maintain a near-identical layout footprint 
+to prevent page overflow. Do not append additional clauses or create new sentence layers 
+that extend the line count beyond the original bounds.
+</data_integrity_and_footprint>
+
+<output_delivery_constraint>
+Return ONLY the raw, updated LaTeX block matching the structural shell provided by the 
+user. Do not wrap the response in markdown code blocks (```), do not include preambles, 
+and do not append contextual explanations.
+</output_delivery_constraint>
 
 Example of allowed change (bullet text only):
 BEFORE: \item Built microservices for payments
@@ -178,15 +160,23 @@ AFTER:  \item Designed and implemented microservices architecture for payment
 
 
 WORK_EXPERIENCE_SECTION_USER = r"""
-CURRENT WORK EXPERIENCE LATEX: {experience_latex}
+<current_experience_latex>
+{experience_latex}
+</current_experience_latex>
 
-JOB DESCRIPTION: {job_description}
+<target_job_description>
+{job_description}
+</target_job_description>
 
-Rewrite the \item bullet text using the CAR framework to match JD priorities.
-You MUST output the COMPLETE block EXACTLY as provided, preserving every
-LaTeX command and its arguments (e.g. \resumeSubheading{{...}}{{...}},
-\resumeSubHeadingListStart/End). Change ONLY the text inside \item bullets.
-Keep total length close to the original. Output ONLY the LaTeX.
+<execution_instructions>
+1. Parse the <target_job_description> to determine primary toolsets, patterns, and 
+organizational priorities.
+2. Refactor the text inside the \item tags of <current_experience_latex> using the rules 
+defined in the system prompt.
+3. Crucially, escape all percentage markers as \% and ampersands as \& to prevent 
+compiler execution breaks.
+4. Keep total length close to the original. Output ONLY the LaTeX.
+</execution_instructions>
 """
 
 
@@ -214,14 +204,6 @@ BEFORE: \item Built a web app
 AFTER:  \item Built distributed chat application using Python FastAPI,
         PostgreSQL, and Redis, handling 500+ concurrent users with <100ms latency
 """
-
-
-
-
-
-
-
-
 
 
 USER_PROJECT_SECTION_USER = r"""
@@ -295,6 +277,7 @@ Do NOT modify:
 Do MODIFY:
 - Content inside optimized sections
 """
+
 
 USER_ASSEMBLE_PROMPT = """
 ORIGINAL RESUME LATEX: {original_resume_latex}
