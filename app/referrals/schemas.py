@@ -29,9 +29,3 @@ class UpdateReferralRequest(BaseModel):
 class GenerateReferralsResponse(BaseModel):
     generated: int
     referrals: list[ReferralResponse]
-
-
-class ReferralSearchSchema(BaseModel):
-    queries: List[str] = Field(
-        description="A list of highly targeted search engine strings optimized for finding current employee profiles on LinkedIn."
-    )

@@ -111,20 +111,6 @@ def _extract_jsonld_meta(soup: BeautifulSoup) -> tuple[str, dict]:
         if keywords:
             meta["keywords"] = keywords
 
-        # Team signals from industry + employment type + skills-as-tech-stack.
-        industry = data.get("industry")
-        if isinstance(industry, list):
-            industry = industry[0] if industry else None
-
-        if skills or (isinstance(industry, str) and industry):
-            meta["team_signals"] = {
-                "team_size": None,
-                "tech_stack": skills,
-                "industry": industry
-                if isinstance(industry, str)
-                else None,
-            }
-
         return description, meta
     return "", {}
 

@@ -14,7 +14,7 @@ class JobJDResponse(BaseModel):
     raw_text: Optional[str] = None
     skills: Optional[Dict[str, Any]] = None
     keywords: Optional[List[str]] = None
-    team_signals: Optional[Dict[str, Any]] = None
+    team_signals: Optional[List[str]] = None
     llm_summary: Optional[str] = None
     learning: Optional[Dict[str, List[str]]] = None
     created_at: datetime
@@ -32,6 +32,6 @@ class UpdateJDRequest(BaseModel):
     raw_text: Optional[str] = None
     skills: Optional[Dict[str, Any]] = None
     keywords: Optional[List[str]] = None
-    team_signals: Optional[Dict[str, Any]] = None
+    team_signals: Optional[List[str]] = None
     llm_summary: Optional[str] = None
     learning: Optional[Dict[str, List[str]]] = None

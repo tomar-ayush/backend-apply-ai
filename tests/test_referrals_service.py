@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.referrals.models import ReferralStatus
 from app.referrals.schemas import UpdateReferralRequest
-from app.referrals.service import ReferralService, _build_referral_queries
+from app.referrals.service import (
+    ReferralService,
+    _build_referral_queries,
+)
 from app.common.exceptions import InvalidTransitionError, NotFoundError
 from tests.conftest import make_user, make_referral, make_job
 
@@ -17,7 +20,6 @@ def test_build_referral_queries_prefers_stored_team_signals():
 
     queries = _build_referral_queries(
         "Acme Corp",
-        "Senior Backend Engineer",
         stored_queries,
     )
 
@@ -30,7 +32,6 @@ def test_build_referral_queries_prefers_stored_team_signals():
 def test_build_referral_queries_replaces_company_placeholder():
     queries = _build_referral_queries(
         "Acme Corp",
-        "Senior Backend Engineer",
         [
             'site:://linkedin.com company_name AND ("Manager" OR "Lead") AND "Engineering" AND "India"'
         ],

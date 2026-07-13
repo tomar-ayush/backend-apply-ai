@@ -21,7 +21,6 @@ from app.referrals.schemas import (
     UpdateReferralRequest,
     GenerateReferralsResponse,
     ReferralResponse,
-    ReferralSearchSchema,
 )
 from app.jobs.models import Job
 from app.users.models import User
@@ -38,50 +37,6 @@ from app.config import settings
 from ddgs import DDGS
 
 logger = get_logger(__name__)
-
-
-def _shorten_company_name(company: str) -> str:
-    """Return the shortest searchable form — strips legal suffixes and numeric tenant prefixes."""
-    suffixes = sorted(
-        [
-            " pvt ltd",
-            " pvt. ltd.",
-            " private limited",
-            " limited",
-            " ltd.",
-            " ltd",
-            " inc.",
-            " inc",
-            " corp.",
-            " corp",
-            " llc",
-            " plc",
-            " & rock technology india pvt ltd",
-            " & rock technology india",
-            " mining & rock technology india",
-            " mining & rock solutions",
-            " mining and rock solutions",
-            " & rock solutions",
-        ],
-        key=len,
-        reverse=True,
-    )
-    name = company.strip()
-    lower = name.lower()
-    for suffix in suffixes:
-        if lower.endswith(suffix):
-            name = name[: -len(suffix)].strip()
-            lower = name.lower()
-            break
-    parts = name.split(" ", 1)
-    if len(parts) == 2 and parts[0].isdigit():
-        name = parts[1]
-    return name.strip()
-
-
-def _clean_role(role: str) -> str:
-    """Strip parenthetical abbreviations like (GET), (SDE) that hurt search recall."""
-    return re.sub(r"\s*\([^)]*\)", "", role).strip()
 
 
 def _render_stored_query(query: str, company: str) -> str:
@@ -102,156 +57,20 @@ def _render_stored_query(query: str, company: str) -> str:
 
 
 def _build_referral_queries(
-    company: str, role: str, team_signals
+    company: str, team_signals: Optional[List[str]]
 ) -> list[tuple[str, int]]:
-    """Build LinkedIn referral search queries.
+    """Build LinkedIn referral search queries from prebuilt stored queries.
 
-    Prefer prebuilt search queries stored on the JD when available. If the JD
-    provides a legacy dictionary of team signals, fall back to the heuristic
-    query builder that derives queries from company, role, and signals.
+    Each stored query (a list of strings on the JD) is rendered with the
+    runtime company name and assigned a priority based on its position.
     """
-    if isinstance(team_signals, list):
-        queries = [
-            q.strip() for q in team_signals if str(q or "").strip()
-        ]
-        if queries:
-            return [
-                (
-                    _render_stored_query(query, company),
-                    index + 1,
-                )
-                for index, query in enumerate(queries[:10])
-            ]
-
-    # TODO: Remove Unused code after testing
-    short = _shorten_company_name(company)
-    clean = _clean_role(role)
-    signals = team_signals
-    if not isinstance(signals, dict):
-        signals = {}
-    industry = (signals.get("industry") or "").lower()
-    tech: list = signals.get("tech_stack") or []
-
-    # Extract meaningful function keywords from role, drop generic words
-    _stop = {
-        "graduate",
-        "engineer",
-        "trainee",
-        "senior",
-        "junior",
-        "lead",
-        "associate",
-        "intern",
-        "manager",
-        "analyst",
-        "specialist",
-    }
-    role_kws = [
-        w
-        for w in clean.lower().split()
-        if w not in _stop and len(w) > 3
+    queries = [
+        q.strip() for q in (team_signals or []) if str(q or "").strip()
     ]
-
-    # list of (query, priority) — lower number = contact first
-    tagged: list[tuple[str, int]] = []
-
-    planning_signals = {
-        "plan",
-        "supply",
-        "demand",
-        "inventory",
-        "logistics",
-        "procurement",
-    }
-    is_planning = any(k in role.lower() for k in planning_signals)
-
-    # --- Priority 1: Manager in the same team/function ---
-    for kw in role_kws[:2]:
-        tagged.append(
-            (f'site:linkedin.com/in "{short}" "{kw}" manager -jobs', 1)
-        )
-    if is_planning:
-        tagged.append(
-            (
-                f'site:linkedin.com/in "{short}" "supply chain" manager -jobs',
-                1,
-            )
-        )
-        tagged.append(
-            (
-                f'site:linkedin.com/in "{short}" "planning" manager -jobs',
-                1,
-            )
-        )
-
-    # --- Priority 2: Senior / mid-level peers in the same function ---
-    for kw in role_kws[:2]:
-        tagged.append(
-            (
-                f'site:linkedin.com/in "{short}" "senior {kw}" OR "lead {kw}" -jobs',
-                2,
-            )
-        )
-    if is_planning:
-        tagged.append(
-            (
-                f'site:linkedin.com/in "{short}" "senior" "supply chain" -jobs',
-                2,
-            )
-        )
-        tagged.append(
-            (
-                f'site:linkedin.com/in "{short}" "demand planning" OR "inventory planning" -jobs',
-                2,
-            )
-        )
-
-    # --- Priority 3: Broader same-function pool ---
-    for kw in role_kws[:2]:
-        tagged.append(
-            (f'site:linkedin.com/in "{short}" "{kw}" -jobs', 3)
-        )
-    tagged.append(
-        (f'site:linkedin.com/in "{short}" engineer -jobs -recruiter', 3)
-    )
-    if industry and industry not in {"", "none"}:
-        tagged.append(
-            (f'site:linkedin.com/in "{short}" "{industry}"', 3)
-        )
-    if tech:
-        tagged.append(
-            (f'site:linkedin.com/in "{short}" {tech[0]} -jobs', 3)
-        )
-
-    # --- Priority 4: General managers / directors ---
-    tagged.append(
-        (f'site:linkedin.com/in "{short}" manager -jobs -recruiter', 4)
-    )
-    tagged.append(
-        (f'site:linkedin.com/in "{short}" director -jobs -recruiter', 4)
-    )
-
-    # --- Priority 5: HR / Recruiter ---
-    tagged.append(
-        (
-            f'site:linkedin.com/in "{short}" "talent acquisition" OR recruiter',
-            5,
-        )
-    )
-
-    # --- Priority 5: Broad fallback without site: ---
-    tagged.append(
-        (f'linkedin.com/in "{short}" {clean} -job -"job posting"', 5)
-    )
-
-    seen: set[str] = set()
-    deduped: list[tuple[str, int]] = []
-    for q, p in tagged:
-        if q not in seen:
-            seen.add(q)
-            deduped.append((q, p))
-
-    return deduped[:10]
+    return [
+        (_render_stored_query(query, company), index + 1)
+        for index, query in enumerate(queries[:10])
+    ]
 
 
 def _normalize_linkedin_url(url: str) -> str:
@@ -336,14 +155,13 @@ class ReferralService:
             )
 
         role = jd.role
-        team_signals = jd.team_signals or {}
+        team_signals = jd.team_signals or []
 
-        queries = _build_referral_queries(company, role, team_signals)
+        queries = _build_referral_queries(company, team_signals)
         logger.info(
-            "referral_generation_start job_id=%s company=%s short_company=%s role=%s queries=%d",
+            "referral_generation_start job_id=%s company=%s role=%s queries=%d",
             str(job.id),
             company,
-            _shorten_company_name(company),
             role,
             len(queries),
         )
