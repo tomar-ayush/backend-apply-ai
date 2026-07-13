@@ -84,19 +84,51 @@ def _clean_role(role: str) -> str:
     return re.sub(r"\s*\([^)]*\)", "", role).strip()
 
 
-def _build_referral_queries(
-    company: str, role: str, team_signals: dict
-) -> list[tuple[str, int]]:
-    """
-    Build diverse LinkedIn search queries targeting current employees who could refer.
+def _render_stored_query(query: str, company: str) -> str:
+    """Render a stored referral query with the runtime company name."""
+    rendered = (query or "").strip()
+    if not rendered:
+        return rendered
 
-    Strategy: search for COLLEAGUES (any level), not exact-title matches.
-    People with the identical trainee title can't refer you — senior engineers and
-    managers can. Queries fan out across role function, department, industry, and HR.
+    if "company_name" in rendered.lower():
+        return re.sub(
+            r"\bcompany_name\b",
+            company,
+            rendered,
+            flags=re.IGNORECASE,
+        )
+
+    return rendered
+
+
+def _build_referral_queries(
+    company: str, role: str, team_signals
+) -> list[tuple[str, int]]:
+    """Build LinkedIn referral search queries.
+
+    Prefer prebuilt search queries stored on the JD when available. If the JD
+    provides a legacy dictionary of team signals, fall back to the heuristic
+    query builder that derives queries from company, role, and signals.
     """
+    if isinstance(team_signals, list):
+        queries = [
+            q.strip() for q in team_signals if str(q or "").strip()
+        ]
+        if queries:
+            return [
+                (
+                    _render_stored_query(query, company),
+                    index + 1,
+                )
+                for index, query in enumerate(queries[:10])
+            ]
+
+    # TODO: Remove Unused code after testing
     short = _shorten_company_name(company)
     clean = _clean_role(role)
-    signals = team_signals or {}
+    signals = team_signals
+    if not isinstance(signals, dict):
+        signals = {}
     industry = (signals.get("industry") or "").lower()
     tech: list = signals.get("tech_stack") or []
 

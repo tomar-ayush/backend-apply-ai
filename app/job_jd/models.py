@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import (
     String,
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database.session import Base
+from app.jobs.models import Job
 
 
 class JobJD(Base):
@@ -37,7 +38,9 @@ class JobJD(Base):
     raw_text: Mapped[Optional[str]] = mapped_column(Text)
     skills: Mapped[Optional[dict]] = mapped_column(JSON)
     keywords: Mapped[Optional[dict]] = mapped_column(JSON)
-    team_signals: Mapped[Optional[dict]] = mapped_column(JSON)
+    team_signals: Mapped[Optional[List[str]]] = mapped_column(
+        ARRAY(String)
+    )
     llm_summary: Mapped[Optional[str]] = mapped_column(Text)
     learning: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True
@@ -48,6 +51,3 @@ class JobJD(Base):
     )
 
     job: Mapped["Job"] = relationship("Job", back_populates="jd")
-
-
-from app.jobs.models import Job

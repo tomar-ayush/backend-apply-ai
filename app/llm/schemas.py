@@ -11,22 +11,6 @@ class Skills(BaseModel):
     )
 
 
-class TeamSignals(BaseModel):
-    team_size: Optional[str] = Field(
-        None,
-        description="Description or count of team size if mentioned, else null.",
-    )
-    tech_stack: List[str] = Field(
-        description="List of technologies, frameworks, or tools mentioned."
-    )
-    work_style: Optional[Literal["remote", "hybrid", "onsite"]] = Field(
-        None, description="Strictly choose one if mentioned."
-    )
-    industry: Optional[str] = Field(
-        None, description="The specific industrial sector or domain."
-    )
-
-
 class JobParseSchema(BaseModel):
     """Combined JD parse: extracted fields + interview-prep learning material."""
 
@@ -42,7 +26,9 @@ class JobParseSchema(BaseModel):
     keywords: List[str] = Field(
         description="Important keywords and key phrases optimized for an ATS search indexing system."
     )
-    team_signals: TeamSignals
+    team_signals: List[str] = Field(
+        description="List of probable team signals like team name or department(hierarchical) keypoint can be used in search."
+    )
     llm_summary: str = Field(
         description="A brief 2-3 sentence summary highlighting the distinctive responsibilities of the position."
     )
