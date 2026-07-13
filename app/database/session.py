@@ -12,7 +12,7 @@ class Base(DeclarativeBase):
     pass
 
 
-connect_args = {"ssl": True}
+connect_args = {"ssl": True, "statement_cache_size": 0}
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -21,6 +21,7 @@ engine = create_async_engine(
     pool_size=10,
     max_overflow=20,
     pool_recycle=240,
+    pool_reset_on_return="commit",
     connect_args=connect_args if connect_args else None,
 )
 
