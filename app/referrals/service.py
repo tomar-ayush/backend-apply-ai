@@ -59,18 +59,27 @@ def _render_stored_query(query: str, company: str) -> str:
 def _build_referral_queries(
     company: str, team_signals: Optional[List[str]]
 ) -> list[tuple[str, int]]:
-    """Build LinkedIn referral search queries from prebuilt stored queries.
-
-    Each stored query (a list of strings on the JD) is rendered with the
-    runtime company name and assigned a priority based on its position.
+    """Build LinkedIn referral search queries.
+    Prefer prebuilt Google X-Ray query strings stored on the JD
+    (team_signals). If none are available, fall back to a single
+    company-scoped query so referrals can still be generated.
     """
     queries = [
         q.strip() for q in (team_signals or []) if str(q or "").strip()
     ]
-    return [
-        (_render_stored_query(query, company), index + 1)
-        for index, query in enumerate(queries[:10])
-    ]
+    if queries:
+        return [
+            (_render_stored_query(query, company), index + 1)
+            for index, query in enumerate(queries[:10])
+        ]
+
+    # Fallback: a broad company-scoped query when no stored signals exist.
+    fallback = (
+        f'site:linkedin.com/in "{company}" '
+        f'("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering" OR "Backend Lead")'
+        f"-jobs"
+    )
+    return [(fallback, 1)]
 
 
 def _normalize_linkedin_url(url: str) -> str:

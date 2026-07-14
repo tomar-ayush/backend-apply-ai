@@ -244,6 +244,8 @@ class JobJDService:
                 "Failed to extract job text from the page. The page may require JavaScript rendering."
             )
 
+        existing = await self.repo.get_by_job_id(job_id)
+
         if not ai:
             parsed = {
                 "company": extracted_meta.get("company"),
@@ -256,12 +258,22 @@ class JobJDService:
             }
 
             logger.info("parsed metadata %s", parsed)
+            company = (
+                existing.company
+                if existing and existing.company
+                else parsed["company"]
+            )
+            role = (
+                existing.role
+                if existing and existing.role
+                else parsed["role"]
+            )
             jd = await self.repo.upsert(
                 job_id=job_id,
                 raw_html=raw_html[:50000],
                 raw_text=raw_text[:20000],
-                company=parsed["company"],
-                role=parsed["role"],
+                company=company,
+                role=role,
                 workday_job_id=parsed["workday_job_id"],
                 skills=parsed["skills"],
                 keywords=parsed["keywords"],
@@ -289,12 +301,22 @@ class JobJDService:
         )
         logger.info("jd_llm_parsed job_id=%s", str(job_id))
 
+        company = (
+            existing.company
+            if existing and existing.company
+            else parsed.get("company")
+        )
+        role = (
+            existing.role
+            if existing and existing.role
+            else parsed.get("role")
+        )
         jd = await self.repo.upsert(
             job_id=job_id,
             raw_html=raw_html[:50000],
             raw_text=raw_text[:20000],
-            company=parsed.get("company"),
-            role=parsed.get("role"),
+            company=company,
+            role=role,
             workday_job_id=parsed.get("workday_job_id"),
             skills=parsed.get("skills"),
             keywords=parsed.get("keywords"),
