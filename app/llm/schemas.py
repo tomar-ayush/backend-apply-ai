@@ -26,8 +26,8 @@ class JobParseSchema(BaseModel):
     keywords: List[str] = Field(
         description="Important keywords and key phrases optimized for an ATS search indexing system."
     )
-    team_signals: List[str] = Field(
-        description="List of probable team signals like team name or department(hierarchical) keypoint can be used in search."
+    extracted_department: List[str] = Field(
+        description="List of strings representing the exact, verbatim business units, teams, or technical domains responsible for the role."
     )
     llm_summary: str = Field(
         description="A brief 2-3 sentence summary highlighting the distinctive responsibilities of the position."

@@ -57,29 +57,38 @@ def _render_stored_query(query: str, company: str) -> str:
 
 
 def _build_referral_queries(
-    company: str, team_signals: Optional[List[str]]
+    company: str, extracted_department: Optional[List[str]]
 ) -> list[tuple[str, int]]:
     """Build LinkedIn referral search queries.
     Prefer prebuilt Google X-Ray query strings stored on the JD
-    (team_signals). If none are available, fall back to a single
+    (extracted_department). If none are available, fall back to a single
     company-scoped query so referrals can still be generated.
     """
-    queries = [
-        q.strip() for q in (team_signals or []) if str(q or "").strip()
-    ]
-    if queries:
-        return [
-            (_render_stored_query(query, company), index + 1)
-            for index, query in enumerate(queries[:10])
-        ]
 
-    # Fallback: a broad company-scoped query when no stored signals exist.
-    fallback = (
+    search_query = (
         f'site:linkedin.com/in "{company}" '
         f'("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering" OR "Backend Lead")'
-        f" AND India"
     )
-    return [(fallback, 1)]
+
+    extracted_dept = [
+        q.strip()
+        for q in (extracted_department or [])
+        if str(q or "").strip()
+    ]
+
+    if extracted_dept:
+        # TODO: Come back to llm generation in future
+        # return [
+        #     (_render_stored_query(query, company), index + 1)
+        #     for index, query in enumerate(queries[:10])
+        # ]
+
+        formatted_depts = [f'"{dept}"' for dept in extracted_dept]
+        dept_clause = f"({' OR '.join(formatted_depts)})"
+        search_query += f" AND {dept_clause}"
+
+    search_query += " AND India"
+    return [(search_query, 1)]
 
 
 def _normalize_linkedin_url(url: str) -> str:
@@ -164,9 +173,9 @@ class ReferralService:
             )
 
         role = jd.role
-        team_signals = jd.team_signals or []
+        extracted_department = jd.extracted_department or []
 
-        queries = _build_referral_queries(company, team_signals)
+        queries = _build_referral_queries(company, extracted_department)
         logger.info(
             "referral_generation_start job_id=%s company=%s role=%s queries=%d",
             str(job.id),

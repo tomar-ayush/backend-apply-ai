@@ -253,7 +253,7 @@ class JobJDService:
                 "workday_job_id": extracted_meta.get("workday_job_id"),
                 "skills": extracted_meta.get("skills"),
                 "keywords": extracted_meta.get("keywords"),
-                "team_signals": extracted_meta.get("team_signals"),
+                "extracted_department": extracted_meta.get("extracted_department"),
                 "llm_summary": extracted_meta.get("llm_summary"),
             }
 
@@ -277,7 +277,7 @@ class JobJDService:
                 workday_job_id=parsed["workday_job_id"],
                 skills=parsed["skills"],
                 keywords=parsed["keywords"],
-                team_signals=parsed["team_signals"],
+                extracted_department=parsed["extracted_department"],
                 llm_summary="Do AI parse to get llm summary",
             )
             logger.info(
@@ -320,7 +320,7 @@ class JobJDService:
             workday_job_id=parsed.get("workday_job_id"),
             skills=parsed.get("skills"),
             keywords=parsed.get("keywords"),
-            team_signals=parsed.get("team_signals"),
+            extracted_department=parsed.get("extracted_department"),
             llm_summary=parsed.get("llm_summary"),
             learning=parsed.get("learning"),
         )

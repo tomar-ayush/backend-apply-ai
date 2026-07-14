@@ -12,7 +12,7 @@ from app.common.exceptions import InvalidTransitionError, NotFoundError
 from tests.conftest import make_user, make_referral, make_job
 
 
-def test_build_referral_queries_prefers_stored_team_signals():
+def test_build_referral_queries_prefers_stored_extracted_department():
     stored_queries = [
         'site:://linkedin.com "Acme" AND ("Manager" OR "Lead") AND "Engineering" AND "India"',
         'site:://linkedin.com "Acme" AND ("Manager" OR "Lead") AND "Product" AND "India"',

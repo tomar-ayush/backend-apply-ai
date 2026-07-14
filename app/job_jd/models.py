@@ -38,7 +38,7 @@ class JobJD(Base):
     raw_text: Mapped[Optional[str]] = mapped_column(Text)
     skills: Mapped[Optional[dict]] = mapped_column(JSON)
     keywords: Mapped[Optional[dict]] = mapped_column(JSON)
-    team_signals: Mapped[Optional[List[str]]] = mapped_column(
+    extracted_department: Mapped[Optional[List[str]]] = mapped_column(
         ARRAY(String)
     )
     llm_summary: Mapped[Optional[str]] = mapped_column(Text)
