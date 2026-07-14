@@ -77,7 +77,7 @@ def _build_referral_queries(
     fallback = (
         f'site:linkedin.com/in "{company}" '
         f'("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering" OR "Backend Lead")'
-        f"-jobs"
+        f"-jobs AND India"
     )
     return [(fallback, 1)]
 
