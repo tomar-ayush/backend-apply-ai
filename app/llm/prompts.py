@@ -6,10 +6,19 @@ You are an advanced data extraction system designed to parse raw technical job d
 2. TEXT CONSTRAINTS: Keep the text fragments clean and direct. Ensure all extracted items are verified matches against the provided source text.
 </extraction_rules>
 
-<department_extraction_rules>
-1. SIGNAL EXTRACTION: Identify the core operational department, team, or technical division from the job description (e.g., "Backend", "Data Science", "Infrastructure", "Product").
-2. FALLBACK LOGIC: If no specific department signal is explicitly present in the text, default to outputting the string "Engineering". Do not output any full URLs or markdown.
-</department_extraction_rules>
+<google_search_query_generation_rules>
+1. DYNAMIC SEARCH COMPOSITION: For the `extracted_department` array field, you MUST construct between 1 and 3 distinct Google X-Ray search query strings. This array must never be returned empty.
+2. WORD EXTRACTION & CONDITIONAL OMISSION: Extract the specific team, department, or division keywords (e.g., "Backend", "Data Science") directly from the job description text. If no specific department or team signal is explicitly mentioned in the text, you MUST completely skip and remove the department filter block from the final query syntax. Do not output empty strings, raw placeholders, or empty quotation marks.
+3. LITERAL MATCH CONSTRAINT: You are strictly forbidden from modifying, shortening, or simplifying the software title blocks inside the parentheses. You must output the title strings ("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering" OR "Backend Lead") exactly as written. Do not compress them into generic business phrases.
+4. STRUCTURED TARGETING: Format each string inside the `extracted_department` list precisely using the exact patterns defined below. Ensure there is NO space directly inside the `site:` operator prefix, use a clean colon syntax, and preserve the literal token `company_name` exactly for backend replacement:
+   - Pattern A (If department keywords ARE found):
+     site:://linkedin.com company_name AND ("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering" OR "Backend Lead") AND "Extracted Team/Department Keyword" AND "India"
+
+   - Pattern B (Fallback - If NO department keyword is found, omit the keyword block entirely):
+     site:://linkedin.com company_name AND ("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering") AND "India"
+</google_search_query_generation_rules>
+
+
 
 <learning_generation_rules>
 1. PRIMARY TECH TOPICS: Identify the primary programming language or core technology stack required by the job posting. Generate a collection of foundational topic names (e.g., "Python", "System Design", "JavaScript").
@@ -31,7 +40,7 @@ Return ONLY a single valid JSON object (no markdown, no code fences) with exactl
 - "workday_job_id": string or null (job posting id like R00XXXXX if present, else null)
 - "skills": object with "required" (list of strings) and "preferred" (list of strings)
 - "keywords": list of strings (ATS-relevant keywords/phrases)
-- "extracted_department": string (The exact department or technical domain keyword extracted according to the system rules)
+- "extracted_department": list of strings (Generate 1 to 3 Google X-Ray search query templates formatted exactly as: site:linkedin.com/in company_name AND ("Manager" OR "Lead") AND "Extracted Team/Department Keyword" AND "India")
 - "llm_summary": string (2-3 sentence summary of distinctive responsibilities)
 - "learning": object mapping topic name -> list of standard, frequently-asked interview questions (the {{topic: [questions]}} format)
 

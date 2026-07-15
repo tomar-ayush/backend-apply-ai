@@ -21,6 +21,7 @@ from app.job_jd.service import JobJDService
 from app.referrals.schemas import (
     GenerateReferralsResponse,
     ReferralResponse,
+    BulkCreateReferralsRequest,
 )
 from app.referrals.service import ReferralService
 
@@ -133,6 +134,25 @@ async def generate_referrals(
 ):
     job = await JobService(db).get(job_id, current_user)
     return await ReferralService(db).generate(job, current_user)
+
+
+@router.post(
+    "/{job_id}/referrals",
+    response_model=list[ReferralResponse],
+    status_code=201,
+)
+async def create_referrals(
+    job_id: uuid.UUID,
+    req: BulkCreateReferralsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create referrals from a user-provided list (name, linkedin_url, priority)."""
+    job = await JobService(db).get(job_id, current_user)
+    created = await ReferralService(db).create_many_referrals(
+        job, req.referrals
+    )
+    return [ReferralResponse.model_validate(r) for r in created]
 
 
 @router.get(

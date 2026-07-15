@@ -27,7 +27,7 @@ class JobParseSchema(BaseModel):
         description="Important keywords and key phrases optimized for an ATS search indexing system."
     )
     extracted_department: List[str] = Field(
-        description="List of strings representing the exact, verbatim business units, teams, or technical domains responsible for the role."
+        description="List of Google X-Ray search query strings (1-3) targeting the extracted department/team, used to find referrals on LinkedIn. Each string uses the literal token company_name for runtime substitution."
     )
     llm_summary: str = Field(
         description="A brief 2-3 sentence summary highlighting the distinctive responsibilities of the position."

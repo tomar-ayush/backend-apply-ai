@@ -1,4 +1,3 @@
-import re
 import uuid
 import json
 from app.common.logging import get_logger
@@ -9,6 +8,7 @@ import random
 from urllib.parse import urlparse, urlunparse
 
 import httpx
+import http.client
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.referrals.models import (
@@ -21,6 +21,7 @@ from app.referrals.schemas import (
     UpdateReferralRequest,
     GenerateReferralsResponse,
     ReferralResponse,
+    CreateReferralRequest,
 )
 from app.jobs.models import Job
 from app.users.models import User
@@ -40,55 +41,60 @@ logger = get_logger(__name__)
 
 
 def _render_stored_query(query: str, company: str) -> str:
-    """Render a stored referral query with the runtime company name."""
-    rendered = (query or "").strip()
-    if not rendered:
-        return rendered
+    """Return a stored referral query as-is.
 
-    if "company_name" in rendered.lower():
-        return re.sub(
-            r"\bcompany_name\b",
-            company,
-            rendered,
-            flags=re.IGNORECASE,
-        )
-
-    return rendered
+    The `company_name` token is already substituted at JD parse time
+    (in JobJDService.parse_and_store), so no runtime rendering is needed.
+    `company` is accepted for signature compatibility but unused.
+    """
+    return (query or "").strip()
 
 
 def _build_referral_queries(
-    company: str, extracted_department: Optional[List[str]]
+    company: str,
+    extracted_department: Optional[List[str]],
+    role: Optional[str] = None,
 ) -> list[tuple[str, int]]:
-    """Build LinkedIn referral search queries.
-    Prefer prebuilt Google X-Ray query strings stored on the JD
-    (extracted_department). If none are available, fall back to a single
-    company-scoped query so referrals can still be generated.
+    """Build LinkedIn referral search queries from prebuilt Google X-Ray
+    query strings stored on the JD (extracted_department).
+
+    Each stored query is rendered with the runtime company name (the literal
+    `company_name` token is substituted) and assigned a priority based on its
+    position. If no stored queries exist, fall back to a company + role scoped
+    query so referrals can still be generated.
     """
-
-    search_query = (
-        f'site:linkedin.com/in "{company}" '
-        f'("Engineering Lead" OR "Manager" OR "Tech Manager" OR "VP Engineering" OR "Backend Lead")'
-    )
-
-    extracted_dept = [
+    queries = [
         q.strip()
         for q in (extracted_department or [])
         if str(q or "").strip()
     ]
+    if queries:
+        return [
+            (_render_stored_query(query, company), index + 1)
+            for index, query in enumerate(queries[:10])
+        ]
 
-    if extracted_dept:
-        # TODO: Come back to llm generation in future
-        # return [
-        #     (_render_stored_query(query, company), index + 1)
-        #     for index, query in enumerate(queries[:10])
-        # ]
-
-        formatted_depts = [f'"{dept}"' for dept in extracted_dept]
-        dept_clause = f"({' OR '.join(formatted_depts)})"
-        search_query += f" AND {dept_clause}"
-
-    search_query += " AND India"
-    return [(search_query, 1)]
+    # Fallback: scope to the company and the job's role/department keywords
+    # so we target relevant managers/leads rather than any "Manager".
+    role_kw = ""
+    if role:
+        # Use the first two meaningful words of the role as keywords.
+        words = [w for w in role.lower().split() if len(w) > 3][:2]
+        if words:
+            role_kw = " ".join(words)
+    if role_kw:
+        fallback = (
+            f'site:linkedin.com/in "{company}" '
+            f'("{role_kw} lead" OR "{role_kw} manager" OR "head of {role_kw}") '
+            f"AND India"
+        )
+    else:
+        fallback = (
+            f'site:linkedin.com/in "{company}" '
+            f'("Engineering Lead" OR "Manager" OR "Tech Manager" '
+            f'OR "VP Engineering" OR "Backend Lead") AND India'
+        )
+    return [(fallback, 1)]
 
 
 def _normalize_linkedin_url(url: str) -> str:
@@ -151,6 +157,107 @@ def _extract_linkedin_candidates(items) -> list[dict]:
     return candidates
 
 
+def _search_serper(query: str, max_results: int = 10) -> list[dict]:
+    """Search Google via the Serper API and return DDG-shaped result items.
+
+    Returns a list of dicts with 'href' and 'title' keys so the existing
+    candidate parser can consume them unchanged. Returns [] on any failure.
+    No artificial result cap is imposed — Serper returns what it finds.
+    """
+    if not settings.SERPER_API_KEY:
+        logger.warning(
+            "serper_skipped query=%s reason=SERPER_API_KEY not configured",
+            query,
+        )
+        return []
+    try:
+        conn = http.client.HTTPSConnection(
+            "google.serper.dev", timeout=30
+        )
+        payload = json.dumps({"q": query})
+        headers = {
+            "X-API-KEY": settings.SERPER_API_KEY,
+            "Content-Type": "application/json",
+        }
+        conn.request("POST", "/search", payload, headers)
+        res = conn.getresponse()
+        data = json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        logger.error(
+            "serper_query_failed query=%s error=%s", query, str(e)
+        )
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    items: list[dict] = []
+    for result in (
+        data.get("organic") or data.get("organicResults") or []
+    ):
+        link = result.get("link") or ""
+        if not link:
+            continue
+        items.append({"href": link, "title": result.get("title", "")})
+    return items
+
+
+def _search_linkedin_candidates(
+    query: str, max_results: int = 10
+) -> list[dict]:
+    """Search for LinkedIn profiles, preferring Serper (Google) with DDGS fallback.
+
+    Returns parsed candidate dicts (name + linkedin_url).
+    """
+
+    logger.info("query passing to serper: %s", query)
+    items = _search_serper(query, max_results)
+    if not items:
+        logger.warning(
+            "serper_empty_fallback query=%s reason=serper returned no items, using DDGS",
+            query,
+        )
+        try:
+            items = list(
+                DDGS().text(query=query, max_results=max_results) or []
+            )
+        except Exception as e:
+            logger.error(
+                "ddgs_query_failed query=%s error=%s", query, str(e)
+            )
+            return []
+    return _extract_linkedin_candidates(items)
+
+
+class _DedupFilter:
+    """Tracks referral identity keys (name + normalized URL) for a job so the
+    same person is never stored twice — across the DB and within a single run.
+    """
+
+    def __init__(self, existing: List["Referral"]):
+        self.names = {
+            (r.name or "").strip().lower() for r in existing if r.name
+        }
+        self.urls = {r.linkedin_url for r in existing if r.linkedin_url}
+
+    def is_duplicate(self, name: str, url: Optional[str]) -> bool:
+        name = (name or "").strip()
+        if name and name.lower() in self.names:
+            return True
+        if url and url in self.urls:
+            return True
+        return False
+
+    def add(self, name: str, url: Optional[str]) -> None:
+        name = (name or "").strip()
+        if name:
+            self.names.add(name.lower())
+        if url:
+            self.urls.add(url)
+
+
 class ReferralService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -175,7 +282,13 @@ class ReferralService:
         role = jd.role
         extracted_department = jd.extracted_department or []
 
-        queries = _build_referral_queries(company, extracted_department)
+        # Load existing referrals for this job so we don't create duplicates
+        # (by name or by normalized LinkedIn URL).
+        dedup = _DedupFilter(await self.repo.list_for_job(job.id))
+
+        queries = _build_referral_queries(
+            company, extracted_department, role
+        )
         logger.info(
             "referral_generation_start job_id=%s company=%s role=%s queries=%d",
             str(job.id),
@@ -191,37 +304,29 @@ class ReferralService:
 
         candidates: list[dict] = []
         seen_urls: set[str] = set()
-        ddgs_client = DDGS()
 
         MAX_REFERRALS = 10
 
         for index, (query, priority) in enumerate(queries):
             if len(candidates) >= MAX_REFERRALS:
                 break
-            try:
-                items = list(
-                    ddgs_client.text(query=query, max_results=10) or []
-                )
-                logger.info(
-                    "ddgs_results query_index=%d priority=%d results=%d",
-                    index,
-                    priority,
-                    len(items),
-                )
-                for c in _extract_linkedin_candidates(items):
-                    if c["linkedin_url"] not in seen_urls:
-                        seen_urls.add(c["linkedin_url"])
-                        candidates.append({**c, "priority": priority})
-                        if len(candidates) >= MAX_REFERRALS:
-                            break
-            except Exception as e:
-                logger.error(
-                    "ddgs_query_failed index=%d query=%s error=%s",
-                    index,
-                    query,
-                    str(e),
-                )
-                continue
+            found = _search_linkedin_candidates(query, max_results=10)
+            logger.info(
+                "search_results query_index=%d priority=%d results=%d",
+                index,
+                priority,
+                len(found),
+            )
+            for c in found:
+                url = c["linkedin_url"]
+                name = (c.get("name") or "").strip()
+                if url in seen_urls or dedup.is_duplicate(name, url):
+                    continue
+                seen_urls.add(url)
+                dedup.add(name, url)
+                candidates.append({**c, "priority": priority})
+                if len(candidates) >= MAX_REFERRALS:
+                    break
 
             if index < len(queries) - 1:
                 await asyncio.sleep(random.uniform(2.5, 6.5))
@@ -277,6 +382,61 @@ class ReferralService:
         return await self.repo.list_by_job(
             job_id, order_by=order_by, descending=descending
         )
+
+    async def create_many_referrals(
+        self,
+        job: Job,
+        referrals: List["CreateReferralRequest"],
+    ) -> List[Referral]:
+        """Persist a list of user-provided referrals for a job.
+
+        Each entry is normalized (LinkedIn URL canonicalization) and stored
+        with the job id. Entries that duplicate an existing referral for the
+        same job — by name (case-insensitive) or by normalized LinkedIn URL —
+        are skipped so the same person is never stored twice.
+        """
+        dedup = _DedupFilter(await self.repo.list_for_job(job.id))
+
+        records = []
+        skipped = 0
+        for r in referrals:
+            name = (r.name or "").strip()
+            url = (
+                _normalize_linkedin_url(r.linkedin_url)
+                if r.linkedin_url
+                else None
+            )
+            # Skip if the name or the normalized URL already exists for this job.
+            if dedup.is_duplicate(name, url):
+                skipped += 1
+                continue
+            records.append(
+                {
+                    "job_id": job.id,
+                    "name": name,
+                    "linkedin_url": url,
+                    "priority": r.priority,
+                }
+            )
+            # Track locally so duplicates within the same batch are also caught.
+            dedup.add(name, url)
+
+        if not records:
+            logger.info(
+                "referrals_created_manually job_id=%s count=0 skipped=%d",
+                str(job.id),
+                skipped,
+            )
+            return []
+
+        created = await self.repo.create_many(records)
+        logger.info(
+            "referrals_created_manually job_id=%s count=%s skipped=%d",
+            str(job.id),
+            len(created),
+            skipped,
+        )
+        return created
 
     async def _get_and_assert_ownership(
         self, referral_id: uuid.UUID, user: User

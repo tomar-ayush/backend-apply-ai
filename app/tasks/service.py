@@ -237,7 +237,7 @@ class TaskService:
         )
 
         task = await self.repo.create(
-            job_id=req.job_id,
+            job_id=referral.job_id,
             user_id=user.id,
             task_type=TaskType.LINKEDIN_CONNECT,
             payload={
@@ -318,112 +318,6 @@ class TaskService:
             logger.warning(
                 "linkedin_agent_callback_failed referral_id=%s error=%s",
                 str(referral_id),
-                req.error,
-            )
-
-        return {"success": True, "state": req.state}
-        updates["error_message"] = req.error_message
-
-        task = await self.repo.update(task, **updates)
-        logger.info(
-            "task_updated task_id=%s status=%s",
-            str(task_id),
-            req.status.value,
-        )
-        return task
-
-    async def trigger_workday(
-        self, req: TriggerWorkdayRequest, user: User
-    ) -> Task:
-        """Create a WORKDAY_APPLY task and dispatch it to the local worker.
-
-        Mirrors the referrals connect flow: a signed callback token is issued and
-        sent to the worker so it can report completion via the callback endpoint.
-        """
-        job = await self.job_repo.get_by_id_and_user(
-            req.job_id, user.id
-        )
-        if job is None:
-            raise NotFoundError("Job", str(req.job_id))
-
-        task = await self.repo.create(
-            job_id=req.job_id,
-            user_id=user.id,
-            task_type=TaskType.WORKDAY_APPLY,
-            payload={
-                "job_url": req.job_url,
-                "resume_url": req.resume_url,
-            },
-            status=TaskStatus.QUEUED,
-        )
-
-        callback_token = create_callback_token(str(task.id))
-        callback_url = f"{settings.API_BASE_URL.rstrip('/')}/tasks/{task.id}/callback"
-
-        worker_payload = {
-            "task_id": str(task.id),
-            "application_id": task.id,
-            "job_url": req.job_url,
-            "resume_url": req.resume_url,
-            "callback_url": callback_url,
-            "callback_token": callback_token,
-        }
-
-        worker_url = req.worker_url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{worker_url}/run-workday-task",
-                    json=worker_payload,
-                )
-                resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ExternalServiceError(
-                "Worker",
-                f"Worker returned HTTP {e.response.status_code}",
-            )
-        except httpx.RequestError as e:
-            raise ExternalServiceError(
-                "Worker", f"Could not reach worker at {worker_url}: {e}"
-            )
-
-        task = await self.repo.update(task, status=TaskStatus.RUNNING)
-        logger.info(
-            "workday_task_triggered task_id=%s worker_url=%s",
-            str(task.id),
-            worker_url,
-        )
-        return task
-
-    async def handle_workday_callback(
-        self, task_id: uuid.UUID, req: WorkdayCallbackRequest
-    ) -> dict:
-        token_task_id = verify_callback_token(req.token)
-        if token_task_id != str(task_id):
-            raise ForbiddenError("Callback token does not match task")
-
-        task = await self.repo.get_by_id(task_id)
-        if task is None:
-            raise NotFoundError("Task", str(task_id))
-        if task.task_type != TaskType.WORKDAY_APPLY:
-            raise BadRequestError(
-                "Task is not a Workday automation task"
-            )
-
-        if req.state == "completed":
-            task = await self.repo.update(
-                task, status=TaskStatus.COMPLETED
-            )
-            logger.info(
-                "workday_callback_completed task_id=%s", str(task_id)
-            )
-        else:
-            task = await self.repo.update(
-                task, status=TaskStatus.FAILED, error_message=req.error
-            )
-            logger.warning(
-                "workday_callback_failed task_id=%s error=%s",
-                str(task_id),
                 req.error,
             )
 

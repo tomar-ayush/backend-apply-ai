@@ -29,11 +29,13 @@ def test_build_referral_queries_prefers_stored_extracted_department():
     ]
 
 
-def test_build_referral_queries_replaces_company_placeholder():
+def test_build_referral_queries_passes_through_rendered_query():
+    # company_name substitution now happens at JD parse time, so the
+    # builder passes already-rendered queries through unchanged.
     queries = _build_referral_queries(
         "Acme Corp",
         [
-            'site:://linkedin.com company_name AND ("Manager" OR "Lead") AND "Engineering" AND "India"'
+            'site:://linkedin.com Acme Corp AND ("Manager" OR "Lead") AND "Engineering" AND "India"'
         ],
     )
 

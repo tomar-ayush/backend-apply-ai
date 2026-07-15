@@ -20,6 +20,15 @@ class ReferralRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_for_job(
+        self, job_id: str | uuid.UUID
+    ) -> List[Referral]:
+        """Return all referrals for a job (used for duplicate detection)."""
+        result = await self.db.execute(
+            select(Referral).where(Referral.job_id == job_id)
+        )
+        return list(result.scalars().all())
+
     async def list_by_job(
         self,
         job_id: str | uuid.UUID,

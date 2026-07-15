@@ -253,7 +253,9 @@ class JobJDService:
                 "workday_job_id": extracted_meta.get("workday_job_id"),
                 "skills": extracted_meta.get("skills"),
                 "keywords": extracted_meta.get("keywords"),
-                "extracted_department": extracted_meta.get("extracted_department"),
+                "extracted_department": extracted_meta.get(
+                    "extracted_department"
+                ),
                 "llm_summary": extracted_meta.get("llm_summary"),
             }
 
@@ -311,6 +313,24 @@ class JobJDService:
             if existing and existing.role
             else parsed.get("role")
         )
+
+        extracted_department = parsed.get("extracted_department") or []
+        # Substitute the literal `company_name` token with the actual company
+        # (quoted, to match the LinkedIn X-Ray `site:linkedin.com/in "Company"`
+        # pattern) at parse time so the stored queries are ready to run as-is.
+        company_quoted = f'"{company}"' if company else '""'
+        extracted_department = [
+            re.sub(
+                r"\bcompany_name\b",
+                company_quoted,
+                q,
+                flags=re.IGNORECASE,
+            )
+            if "company_name" in (q or "").lower()
+            else q
+            for q in extracted_department
+        ]
+
         jd = await self.repo.upsert(
             job_id=job_id,
             raw_html=raw_html[:50000],
@@ -320,7 +340,7 @@ class JobJDService:
             workday_job_id=parsed.get("workday_job_id"),
             skills=parsed.get("skills"),
             keywords=parsed.get("keywords"),
-            extracted_department=parsed.get("extracted_department"),
+            extracted_department=extracted_department,
             llm_summary=parsed.get("llm_summary"),
             learning=parsed.get("learning"),
         )
