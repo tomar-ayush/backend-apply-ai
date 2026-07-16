@@ -73,7 +73,7 @@ class ResumeService:
         and stores both. The canonical LaTeX URL is recorded immediately since the key
         is deterministic.
         """
-        key = self._resume_key(user.id, "original")
+        key = self._resume_key(user.id, "original", "tex")
         presigned_url = r2_storage.generate_presigned_put_url(
             key, RESUME_TEX_CONTENT_TYPE, PRESIGN_EXPIRY_SECONDS
         )
