@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     API_BASE_URL: str = "http://localhost:8000"
 
-    SERPER_API_KEY: str = ""
+    SERPER_API_KEY: str
+
+    LATEX_COMPILE_URL: str = ""
 
     # DATABASE_URL normalization removed from Settings model —
     # normalization is handled in the DB session setup so the raw env value
