@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import Optional, List, Set
 
 from sqlalchemy import (
-    String,
     Text,
+    Boolean,
     Enum as SAEnum,
     ForeignKey,
     DateTime,
     func,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,12 +21,8 @@ from app.database.session import Base
 class JobStatus(str, enum.Enum):
     NEW = "NEW"
     JD_PARSED = "JD_PARSED"
-    REFERRAL_IN_PROGRESS = "REFERRAL_IN_PROGRESS"
-    WAITING_FOR_REFERRAL = "WAITING_FOR_REFERRAL"
     REFERRAL_RECEIVED = "REFERRAL_RECEIVED"
-    RESUME_GENERATED = "RESUME_GENERATED"
-    READY_TO_APPLY = "READY_TO_APPLY"
-    WORKDAY_RUNNING = "WORKDAY_RUNNING"
+    REFERRAL_NOT_RECEIVED = "REFERRAL_NOT_RECEIVED"
     APPLIED = "APPLIED"
     OA = "OA"
     INTERVIEW = "INTERVIEW"
@@ -37,18 +34,11 @@ class JobStatus(str, enum.Enum):
 VALID_JOB_TRANSITIONS: dict[JobStatus, Set[JobStatus]] = {
     JobStatus.NEW: {JobStatus.JD_PARSED},
     JobStatus.JD_PARSED: {
-        JobStatus.REFERRAL_IN_PROGRESS,
-        JobStatus.RESUME_GENERATED,
-    },
-    JobStatus.REFERRAL_IN_PROGRESS: {JobStatus.WAITING_FOR_REFERRAL},
-    JobStatus.WAITING_FOR_REFERRAL: {
         JobStatus.REFERRAL_RECEIVED,
-        JobStatus.RESUME_GENERATED,
+        JobStatus.REFERRAL_NOT_RECEIVED,
     },
-    JobStatus.REFERRAL_RECEIVED: {JobStatus.RESUME_GENERATED},
-    JobStatus.RESUME_GENERATED: {JobStatus.READY_TO_APPLY},
-    JobStatus.READY_TO_APPLY: {JobStatus.WORKDAY_RUNNING},
-    JobStatus.WORKDAY_RUNNING: {JobStatus.APPLIED},
+    JobStatus.REFERRAL_RECEIVED: {JobStatus.APPLIED},
+    JobStatus.REFERRAL_NOT_RECEIVED: {JobStatus.APPLIED},
     JobStatus.APPLIED: {
         JobStatus.OA,
         JobStatus.INTERVIEW,
@@ -86,6 +76,12 @@ class Job(Base):
         nullable=False,
         default=JobStatus.NEW,
         index=True,
+    )
+    referral_received: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
     )
     optimized_resume_pdf_url: Mapped[Optional[str]] = mapped_column(
         Text

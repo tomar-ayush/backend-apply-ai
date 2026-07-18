@@ -1,8 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import List
-import secrets
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 
 class Settings(BaseSettings):
@@ -34,7 +32,7 @@ class Settings(BaseSettings):
 
     SERPER_API_KEY: str
 
-    LATEX_COMPILE_URL: str = ""
+    LATEX_COMPILE_URL: str
 
     # DATABASE_URL normalization removed from Settings model —
     # normalization is handled in the DB session setup so the raw env value

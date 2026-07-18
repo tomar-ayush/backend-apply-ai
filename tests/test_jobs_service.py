@@ -96,10 +96,16 @@ def test_valid_job_transitions():
     assert is_valid_job_transition(JobStatus.NEW, JobStatus.JD_PARSED)
     assert not is_valid_job_transition(JobStatus.NEW, JobStatus.APPLIED)
     assert is_valid_job_transition(
-        JobStatus.JD_PARSED, JobStatus.REFERRAL_IN_PROGRESS
+        JobStatus.JD_PARSED, JobStatus.REFERRAL_RECEIVED
     )
     assert is_valid_job_transition(
-        JobStatus.JD_PARSED, JobStatus.RESUME_GENERATED
+        JobStatus.JD_PARSED, JobStatus.REFERRAL_NOT_RECEIVED
+    )
+    assert is_valid_job_transition(
+        JobStatus.REFERRAL_RECEIVED, JobStatus.APPLIED
+    )
+    assert is_valid_job_transition(
+        JobStatus.REFERRAL_NOT_RECEIVED, JobStatus.APPLIED
     )
     assert is_valid_job_transition(JobStatus.APPLIED, JobStatus.OA)
     assert is_valid_job_transition(

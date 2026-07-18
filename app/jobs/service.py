@@ -101,11 +101,17 @@ class JobService:
             raise InvalidTransitionError(
                 job.status.value, new_status.value
             )
-        await self.repo.update(job, status=new_status)
+        # Setting the status to REFERRAL_RECEIVED flips the referral_received
+        # flag to True; any other status leaves it as-is (it is never reset).
+        kwargs = {"status": new_status}
+        if new_status == JobStatus.REFERRAL_RECEIVED:
+            kwargs["referral_received"] = True
+        await self.repo.update(job, **kwargs)
         logger.info(
-            "job_status_updated job_id=%s status=%s",
+            "job_status_updated job_id=%s status=%s referral_received=%s",
             str(job_id),
             new_status.value,
+            job.referral_received,
         )
         return job
 

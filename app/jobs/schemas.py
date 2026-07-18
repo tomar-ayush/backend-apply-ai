@@ -30,6 +30,7 @@ class JobResponse(BaseModel):
     user_id: uuid.UUID
     workday_url: str
     status: JobStatus
+    referral_received: bool = False
     optimized_resume_pdf_url: Optional[str] = None
     optimized_resume_latex_url: Optional[str] = None
     created_at: datetime
