@@ -45,6 +45,10 @@ class UserProfile(BaseModel):
     llm_provider: Optional[str] = None
     current_llm_model: Optional[str] = None
     has_llm_api_key: bool = False
+    has_openrouter_key: bool = False
+    has_openai_key: bool = False
+    has_gemini_key: bool = False
+    has_claude_key: bool = False
 
     created_at: datetime
     updated_at: datetime

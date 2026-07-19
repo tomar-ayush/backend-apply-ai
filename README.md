@@ -237,12 +237,16 @@ Before using JD parsing, referrals, or resume optimization, set your LLM credent
 ```bash
 PATCH /users/me
 {
-  "llm_provider": "openai",           # or "anthropic"
-  "llm_api_key": "sk-..."             # stored encrypted
+  "llm_provider": "openai",           # openai | anthropic | claude | gemini | google | openrouter
+  "llm_api_key": "sk-..."             # stored encrypted in the matching provider column
 }
 ```
 
-Keys are encrypted at rest using Fernet symmetric encryption. The plaintext key is never returned by any API endpoint.
+API keys are stored per-provider in four encrypted columns
+(`openrouter_llm_api_key`, `openai_llm_api_key`, `gemini_llm_api_key`,
+`claude_llm_api_key`). The `llm_provider` field selects which column is
+read/written. Keys are encrypted at rest using Fernet symmetric encryption and
+the plaintext key is never returned by any API endpoint.
 
 ---
 

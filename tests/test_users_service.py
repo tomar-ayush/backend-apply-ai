@@ -17,7 +17,7 @@ async def test_get_me_returns_profile():
 
 @pytest.mark.asyncio
 async def test_get_me_has_llm_key_flag():
-    user = make_user(encrypted_llm_api_key="someencryptedvalue")
+    user = make_user(openai_llm_api_key="someencryptedvalue")
     svc = UserService(db=None)
     profile = await svc.get_me(user)
     assert profile.has_llm_api_key is True
@@ -36,7 +36,7 @@ async def test_update_me_encrypts_api_key():
         mock_repo.update = AsyncMock(
             return_value=make_user(
                 llm_provider="openai",
-                encrypted_llm_api_key="encrypted",
+                openai_llm_api_key="encrypted",
             )
         )
         MockRepo.return_value = mock_repo
@@ -44,8 +44,8 @@ async def test_update_me_encrypts_api_key():
         profile = await svc.update_me(user, req)
         assert mock_repo.update.called
         call_kwargs = mock_repo.update.call_args[1]
-        assert "encrypted_llm_api_key" in call_kwargs
-        assert call_kwargs["encrypted_llm_api_key"] != "sk-test-key"
+        assert "openai_llm_api_key" in call_kwargs
+        assert call_kwargs["openai_llm_api_key"] != "sk-test-key"
 
 
 @pytest.mark.asyncio
@@ -65,6 +65,25 @@ async def test_update_me_does_not_include_plaintext_key():
 
 
 def test_get_decrypted_llm_key_returns_none_when_not_set():
-    user = make_user(encrypted_llm_api_key=None)
+    user = make_user(openai_llm_api_key=None)
     svc = UserService(db=None)
     assert svc.get_decrypted_llm_key(user) is None
+
+
+def test_get_decrypted_llm_key_returns_none_for_unknown_provider():
+    user = make_user(llm_provider="unknown", openai_llm_api_key="enc")
+    svc = UserService(db=None)
+    assert svc.get_decrypted_llm_key(user) is None
+
+
+@pytest.mark.asyncio
+async def test_update_me_requires_provider_for_key():
+    user = make_user(llm_provider=None)
+    db = AsyncMock()
+    req = UpdateUserRequest(llm_api_key="my-secret-key")
+    svc = UserService(db=db)
+    import pytest
+    from app.common.exceptions import BadRequestError
+
+    with pytest.raises(BadRequestError):
+        await svc.update_me(user, req)

@@ -49,12 +49,15 @@ class User(Base):
     original_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
     ai_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
 
-    # LLM configuration
+    # LLM configuration (per-provider encrypted API keys)
     llm_provider: Mapped[Optional[str]] = mapped_column(String(50))
     current_llm_model: Mapped[Optional[str]] = mapped_column(
         String(100)
     )
-    encrypted_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
+    openrouter_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
+    openai_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
+    gemini_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
+    claude_llm_api_key: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
