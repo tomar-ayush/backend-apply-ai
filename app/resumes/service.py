@@ -149,12 +149,13 @@ class ResumeService:
 
         Pipeline:
           1. Parse the original LaTeX into JSON sections (deterministic, no LLM).
-          2. Run one LLM call PER requested section in PARALLEL (each gets only its block
-             + the JD).
-          3. For any section whose LLM output fails validation, fall back to the ORIGINAL
-             section block so the resume is always complete and compilable.
-          4. Reconstruct the full LaTeX deterministically by splicing optimized blocks
-             back into the original (no LLM in reconstruction -> fast, reliable, cheap).
+          2. Filter requested sections to only those that actually exist in the
+             original document (prevents fabricating sections that weren't there).
+          3. Run one LLM call PER valid section in PARALLEL.
+          4. For any section whose LLM output fails validation, fall back to the
+             ORIGINAL section block so the resume is always complete and compilable.
+          5. Reconstruct the full LaTeX deterministically by splicing optimized
+             blocks back into the original (no LLM in reconstruction).
         """
         user_svc = UserService(None)
         llm_key = user_svc.get_decrypted_llm_key(user)
@@ -187,7 +188,7 @@ class ResumeService:
             "ai_resume_original_latex_len=%d", len(original_latex)
         )
 
-        # Step 1: parse into JSON sections (deterministic).
+        # ── Step 1: parse into JSON sections (deterministic) ──────────
         parsed = _parse_latex_sections(original_latex)
         parsed_keys = {k: len(v) for k, v in parsed.items()}
         logger.info(
@@ -198,9 +199,68 @@ class ResumeService:
             parsed_keys,
         )
 
+        # ── Step 2: filter to sections that actually exist ────────────
+        # "header" and "footer" are structural, not optimisable sections.
+        _STRUCTURAL_KEYS = {"header", "footer"}
+        valid_sections = [
+            s
+            for s in sections
+            if s in parsed and s not in _STRUCTURAL_KEYS
+        ]
+        skipped_sections = [
+            s for s in sections if s not in valid_sections
+        ]
+        if skipped_sections:
+            logger.warning(
+                "ai_resume_sections_not_in_original job_id=%s skipped=%s "
+                "(these sections have no \\section heading in the original resume "
+                "and will NOT be added)",
+                str(job_id),
+                skipped_sections,
+            )
+
+        if not valid_sections:
+            logger.warning(
+                "ai_resume_no_valid_sections job_id=%s requested=%s",
+                str(job_id),
+                sections,
+            )
+            # Nothing to optimise – return the original resume as-is.
+            ai_key = self._resume_key(user.id, "ai", "tex")
+            latex_url = r2_storage.upload_text(
+                ai_key, original_latex, RESUME_TEX_CONTENT_TYPE
+            )
+            pdf_url = None
+            pdf_bytes = await _compile_latex_to_pdf_via_api(
+                original_latex, self.db
+            )
+            if pdf_bytes:
+                pdf_key = self._resume_key(user.id, "ai", "pdf")
+                pdf_url = r2_storage.upload_bytes(
+                    pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE
+                )
+            user_repo = UserRepository(self.db)
+            await user_repo.update(
+                user,
+                ai_resume_latex_url=latex_url,
+                ai_resume_pdf_url=pdf_url,
+            )
+            download_url = (
+                r2_storage.generate_presigned_get_url(
+                    r2_storage.key_from_url(pdf_url),
+                    PRESIGN_EXPIRY_SECONDS,
+                )
+                if pdf_url
+                else None
+            )
+            return GenerateAiResumeResponse(
+                download_url=download_url,
+                validated=True,
+            )
+
         llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
 
-        # Step 2: parallel LLM calls (one per requested section) + topics suggestion.
+        # ── Step 3: parallel LLM calls (one per valid section) ────────
         async def _optimize(section: str):
             cfg = _SECTION_PROMPTS.get(section)
             if cfg is None:
@@ -210,14 +270,32 @@ class ResumeService:
                     section,
                 )
                 return section, None
+
             block = parsed.get(section)
-            if not block:
+
+            # Guard: block must exist and contain more than just whitespace.
+            if not block or not block.strip():
                 logger.warning(
-                    "ai_resume_section_not_found job_id=%s section=%s",
+                    "ai_resume_section_absent job_id=%s section=%s "
+                    "(not present in original resume – skipping)",
                     str(job_id),
                     section,
                 )
                 return section, None
+
+            # Guard: if the block is only a heading with no body content,
+            # log it but still allow the LLM to generate from the JD
+            # (the heading exists in the original, so reconstruction can
+            # place the output correctly).
+            body_only = _section_body(block)
+            if not body_only.strip():
+                logger.info(
+                    "ai_resume_section_heading_only job_id=%s section=%s "
+                    "(heading exists but body is empty – LLM will generate from JD)",
+                    str(job_id),
+                    section,
+                )
+
             logger.info(
                 "ai_resume_optimize_start job_id=%s section=%s block_len=%d",
                 str(job_id),
@@ -235,30 +313,29 @@ class ResumeService:
                 max_tokens=8192,
             )
             logger.info(
-                "ai_resume_llm_raw job_id=%s section=%s new_block_len=%d new_block_preview=%r",
+                "ai_resume_llm_raw job_id=%s section=%s new_block_len=%d "
+                "new_block_preview=%r",
                 str(job_id),
                 section,
                 len(new_block or ""),
                 (new_block or "")[:400],
             )
-            # Diagnostics: if the model echoed the block unchanged, log it so a
-            # no-op optimization is visible instead of silently producing an
-            # identical resume.
+            # Diagnostics: if the model echoed the block unchanged, log it.
             if new_block and new_block.strip() == block.strip():
                 logger.warning(
                     "ai_resume_section_unchanged job_id=%s section=%s "
-                    "(model returned identical block - check JD relevance/length)",
+                    "(model returned identical block – check JD relevance/length)",
                     str(job_id),
                     section,
                 )
             return section, new_block
 
-        optimize_tasks = [_optimize(s) for s in sections]
+        optimize_tasks = [_optimize(s) for s in valid_sections]
         optimized_results = await asyncio.gather(
             *optimize_tasks, return_exceptions=True
         )
 
-        # Step 3: keep optimized block only if it validates; else fall back to original.
+        # ── Step 4: validate; fall back to original on failure ────────
         optimized_sections: dict[str, str] = {}
         for res in optimized_results:
             if isinstance(res, Exception):
@@ -283,7 +360,7 @@ class ResumeService:
                     section,
                 )
 
-        # Step 4: deterministic reconstruction (no LLM).
+        # ── Step 5: deterministic reconstruction (no LLM) ─────────────
         optimized_latex = _reconstruct_latex(
             original_latex, parsed, optimized_sections
         )
@@ -300,7 +377,7 @@ class ResumeService:
             ai_key, optimized_latex, RESUME_TEX_CONTENT_TYPE
         )
 
-        # Compile the optimized LaTeX to PDF via the Lambda compiler and store it too.
+        # Compile the optimized LaTeX to PDF.
         pdf_url = None
         pdf_bytes = await _compile_latex_to_pdf_via_api(
             optimized_latex, self.db
@@ -330,9 +407,11 @@ class ResumeService:
             else None
         )
         logger.info(
-            "ai_resume_generated job_id=%s sections=%s validated=%s has_pdf=%s",
+            "ai_resume_generated job_id=%s valid_sections=%s skipped=%s "
+            "validated=%s has_pdf=%s",
             str(job_id),
-            sections,
+            valid_sections,
+            skipped_sections,
             validated,
             bool(pdf_url),
         )
@@ -365,6 +444,33 @@ class ResumeService:
             download_url=download_url,
             message=f"Use the download_url to fetch the {version} resume PDF",
         )
+
+
+def _strip_all_section_headings(block: str) -> tuple[str, int]:
+    """Remove every \\section{...} / \\section*{...} heading from an LLM-optimised
+    block.  The reconstruction loop emits the ORIGINAL heading separately, so any
+    \\section heading inside the optimised body is either an echo or a hallucinated
+    extra section — both must go.
+
+    \\subsection, \\subsubsection, etc. are intentionally PRESERVED.
+
+    Returns (cleaned_block, number_of_headings_removed).
+    """
+    matches = list(_SECTION_HEADING_RE.finditer(block))
+    if not matches:
+        return block, 0
+    cleaned = _SECTION_HEADING_RE.sub("", block)
+    # Collapse blank lines left behind by removed headings
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip("\n")
+    return cleaned, len(matches)
+
+
+def _section_body(block: str) -> str:
+    """Return only the body of a parsed section block (everything after the
+    \\section{...} heading line).  Used to check whether a section that HAS a
+    heading actually contains any content worth optimising."""
+    m = _SECTION_HEADING_RE.match(block)
+    return block[m.end() :] if m else block
 
 
 def _validate_latex(content: str) -> bool:
@@ -487,10 +593,13 @@ _SECTION_HEADING_RE = re.compile(r"\\section\*?\s*\{(.*?)\}", re.DOTALL)
 def _parse_latex_sections(latex: str) -> dict[str, str]:
     """Step 1: deterministically split the LaTeX document into named section blocks.
 
-    Returns a dict with keys for each known section that is present, plus
-    'header' (everything before the first section, e.g. preamble + name/contact)
-    and 'footer' (everything after the last known section). 'professional_summary'
-    falls back to the body content before the first section when no heading matches.
+    Returns a dict with keys for each known section whose \\section{...} heading
+    is present, plus 'header' (everything before the first section, e.g. preamble
+    + name/contact) and 'footer' (everything after the last known section).
+
+    NOTE: No fallback fabricates a 'professional_summary' from pre-heading content.
+    If the original resume has no Summary/Profile/About heading, the key is simply
+    absent — the caller must treat that as "section does not exist".
     """
     headings = list(_SECTION_HEADING_RE.finditer(latex))
     result: dict[str, str] = {}
@@ -519,14 +628,9 @@ def _parse_latex_sections(latex: str) -> dict[str, str]:
     for key, (start, end) in spans.items():
         result[key] = latex[start:end]
 
-    # professional_summary fallback: body before the first section.
-    if "professional_summary" not in result:
-        doc_start = latex.find("\\begin{document}")
-        if doc_start != -1:
-            body_start = doc_start + len("\\begin{document}")
-            result["professional_summary"] = latex[
-                body_start:first_heading_start
-            ]
+    # ❌ REMOVED: the old fallback that fabricated 'professional_summary' from
+    #    the content between \begin{document} and the first heading.  That
+    #    content is just the name/contact header — not a summary section.
 
     # Footer = everything after the last known section span.
     last_end = max(
@@ -546,9 +650,16 @@ def _reconstruct_latex(
 
     Walks the original document heading-by-heading and emits, for each section,
     the ORIGINAL heading followed by the optimized body (if that section was
-    optimized) or the original body. This guarantees every section heading
+    optimized) or the original body.  This guarantees every section heading
     appears exactly once and no section can be silently dropped, renamed, or
-    have its header eaten by an adjacent optimized section. No LLM involved.
+    have its header eaten by an adjacent optimized section.  No LLM involved.
+
+    Safety rules:
+      - ALL \\section{...} headings are stripped from optimised blocks (the
+        original heading is re-emitted by this loop).
+      - If an optimised block is empty after stripping, the ORIGINAL body is
+        kept (prevents the LLM from accidentally deleting a section).
+      - A final pass verifies no NEW \\section headings leaked into the output.
     """
     headings = list(_SECTION_HEADING_RE.finditer(original_latex))
     if not headings:
@@ -588,19 +699,34 @@ def _reconstruct_latex(
         key = _key_for(m.group(1))
         new_block = optimized.get(key) if key else None
         if new_block:
-            # Strip any heading the model may have emitted at the start of its
-            # output so we never duplicate the (original) heading we emit here.
-            emitted = _SECTION_HEADING_RE.match(new_block)
-            if emitted:
-                new_block = new_block[emitted.end() :].lstrip("\n")
-            body = new_block
-            logger.info(
-                "reconstruct_section i=%d title=%r key=%s OPTIMIZED body_len=%d",
-                i,
-                m.group(1),
-                key,
-                len(body),
+            # Strip ALL \section headings the LLM may have echoed or hallucinated.
+            new_block, stripped_count = _strip_all_section_headings(
+                new_block
             )
+            if stripped_count:
+                logger.info(
+                    "reconstruct_stripped_headings section=%s count=%d",
+                    key,
+                    stripped_count,
+                )
+            # Guard: if the block is empty after stripping, keep the original body.
+            if new_block.strip():
+                body = "\n" + new_block
+                logger.info(
+                    "reconstruct_section i=%d title=%r key=%s OPTIMIZED body_len=%d",
+                    i,
+                    m.group(1),
+                    key,
+                    len(body),
+                )
+            else:
+                logger.warning(
+                    "reconstruct_section_empty_after_strip i=%d title=%r key=%s "
+                    "– falling back to ORIGINAL body",
+                    i,
+                    m.group(1),
+                    key,
+                )
         else:
             logger.info(
                 "reconstruct_section i=%d title=%r key=%s ORIGINAL body_len=%d",
@@ -610,26 +736,33 @@ def _reconstruct_latex(
                 len(body),
             )
 
-        # Ensure the heading starts on its own line. The previous section's body
-        # may end with a "%---...---" comment that was written on the SAME line as
-        # this \section in the original (e.g. "%-----------PROJECTS-----------\section{Projects}").
-        # Without a newline separator, that comment would swallow this heading and
-        # make the section title disappear from the compiled PDF.
+        # Ensure the heading starts on its own line (a preceding "%---" comment
+        # on the same line would otherwise swallow it).
         parts.append("\n" + heading_line)
         parts.append(body)
 
     rebuilt = "".join(parts)
-    # Final sanity check: confirm every original heading survived in the output.
+
+    # ── Final safety net ──────────────────────────────────────────────
+    # Verify every original heading survived AND no new heading appeared.
+    original_titles = {h.group(1) for h in headings}
     for h in headings:
         if h.group(0) not in rebuilt:
             logger.error(
-                "reconstruct_MISSING_HEADING title=%r -- this heading was dropped!",
+                "reconstruct_MISSING_HEADING title=%r – heading was dropped!",
                 h.group(1),
             )
+    for h in _SECTION_HEADING_RE.finditer(rebuilt):
+        if h.group(1) not in original_titles:
+            logger.error(
+                "reconstruct_NEW_HEADING title=%r – LLM injected a section "
+                "that was not in the original resume!",
+                h.group(1),
+            )
+
     logger.info(
-        "reconstruct_done headings_in_output=%d projects_present=%s",
+        "reconstruct_done headings_in_output=%d",
         sum(1 for h in headings if h.group(0) in rebuilt),
-        r"\section{Projects}" in rebuilt,
     )
     return rebuilt
 
