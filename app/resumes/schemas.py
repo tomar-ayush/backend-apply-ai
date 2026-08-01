@@ -29,8 +29,14 @@ class GenerateAiResumeResponse(BaseModel):
     validated: bool  # passed pylatexenc validation
 
 
+class CompileResumeRequest(BaseModel):
+    """Full LaTeX source code sent from frontend for a job resume."""
+
+    latex: str
+
+
 class GetResumeDownloadResponse(BaseModel):
-    """Presigned download URL for a stored resume copy (PDF only)."""
+    """Presigned download URL for a stored resume copy."""
 
     version: Literal["original", "ai"]
     download_url: Optional[str] = (

@@ -13,6 +13,7 @@ from app.resumes.schemas import (
     GenerateAiResumeRequest,
     GenerateAiResumeResponse,
     GetResumeDownloadResponse,
+    CompileResumeRequest,
 )
 
 router = APIRouter()
@@ -56,6 +57,23 @@ async def generate_ai_resume(
 
 
 @router.post(
+    "/compile/{job_id}",
+    response_model=GetResumeDownloadResponse,
+    status_code=200,
+)
+async def compile_resume_for_job(
+    job_id: uuid.UUID,
+    payload: CompileResumeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compile custom LaTeX provided by frontend to PDF, save both .tex and .pdf to R2, and return presigned GET URL."""
+    return await ResumeService(db).compile_custom_latex(
+        job_id, payload.latex, current_user
+    )
+
+
+@router.post(
     "/finalize/{resume_type}",
     response_model=GetResumeDownloadResponse,
     status_code=201,
@@ -76,16 +94,16 @@ async def finalize_resume(
 
 
 @router.get(
-    "/download/{version}/{job_id}",
-    response_model=GetResumeDownloadResponse,
+    "/download/{version}", response_model=GetResumeDownloadResponse
 )
 async def get_resume_download_url(
     version: Literal["original", "ai"],
     job_id: str,
+    is_pdf: bool = Query(True, alias="isPdf"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return a presigned GET URL to download a stored resume copy."""
+    """Return a presigned GET URL to download a stored resume copy (PDF or LaTeX source)."""
     return await ResumeService(db).get_download_url(
-        current_user, version, job_id=job_id
+        current_user, version, job_id=job_id, is_pdf=is_pdf
     )

@@ -62,6 +62,43 @@ def _slot_name_from_url(url: Optional[str]) -> Optional[str]:
     return None
 
 
+def _clean_llm_latex_output(text: Optional[str]) -> str:
+    """Sanitize raw LLM completion string by stripping markdown code blocks, quotes, and preambles."""
+    if not text:
+        return ""
+    cleaned = text.strip()
+
+    # Strip markdown code blocks (```latex ... ``` or ``` ...)
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:latex|tex)?\n?", "", cleaned, flags=re.IGNORECASE)
+    if cleaned.endswith("```"):
+        cleaned = re.sub(r"\n?```$", "", cleaned)
+    cleaned = cleaned.strip()
+
+    # Strip any internal/residual markdown code fences
+    if "```" in cleaned:
+        cleaned = re.sub(r"```(?:latex|tex)?", "", cleaned, flags=re.IGNORECASE)
+        cleaned = cleaned.replace("```", "").strip()
+
+    # Strip surrounding quotes or backticks (e.g., “...”, "...", '...', ``...'' or `...`)
+    quote_chars = '"\'`“”‘’'
+    while cleaned and len(cleaned) >= 2 and cleaned[0] in quote_chars and cleaned[-1] in quote_chars:
+        cleaned = cleaned[1:-1].strip()
+
+    # Strip opening preambles like "Here is the updated LaTeX snippet:"
+    lines = cleaned.splitlines()
+    if lines and (
+        lines[0].lower().startswith("here is")
+        or lines[0].lower().startswith("here's")
+        or lines[0].lower().startswith("updated latex")
+        or lines[0].lower().startswith("optimized latex")
+    ):
+        lines = lines[1:]
+        cleaned = "\n".join(lines).strip()
+
+    return cleaned
+
+
 class ResumeService(BaseService):
     def __init__(self, db: AsyncSession):
         super().__init__(db)
@@ -375,22 +412,24 @@ class ResumeService(BaseService):
                 model=user.current_llm_model,
                 max_tokens=8192,
             )
+            cleaned_block = _clean_llm_latex_output(new_block)
             logger.info(
                 "ai_resume_llm_raw job_id=%s section=%s new_block_len=%d "
-                "new_block_preview=%r",
+                "cleaned_len=%d preview=%r",
                 str(job_id),
                 section,
                 len(new_block or ""),
-                (new_block or "")[:400],
+                len(cleaned_block),
+                cleaned_block[:400],
             )
-            if new_block and new_block.strip() == block.strip():
+            if cleaned_block and cleaned_block.strip() == block.strip():
                 logger.warning(
                     "ai_resume_section_unchanged job_id=%s section=%s "
                     "(model returned identical block – check JD relevance/length)",
                     str(job_id),
                     section,
                 )
-            return section, new_block
+            return section, cleaned_block
 
         optimize_tasks = [_optimize(s) for s in valid_sections]
         optimized_results = await asyncio.gather(
@@ -486,17 +525,27 @@ class ResumeService(BaseService):
         user: User,
         version: str,
         job_id: Optional[uuid.UUID] = None,
+        is_pdf: bool = True,
     ) -> GetResumeDownloadResponse:
-        """Return the presigned GET URL for the compiled PDF of a stored resume copy."""
+        """Return the presigned GET URL for the compiled PDF or LaTeX source of a stored resume copy."""
+        target_fmt = "PDF" if is_pdf else "LaTeX"
         if version == "original":
-            pdf_url = user.original_resume_pdf_url
+            target_url = (
+                user.original_resume_pdf_url
+                if is_pdf
+                else user.original_resume_latex_url
+            )
         elif version == "ai":
             if job_id:
                 job = await self.job_repo.get_by_id(job_id)
                 if job is None:
                     raise NotFoundError("Job", str(job_id))
-                self.assert_ownership(job, user.id, "resume")
-                pdf_url = job.optimized_resume_pdf_url
+                self.assert_ownership(job, user.id, "job")
+                target_url = (
+                    job.optimized_resume_pdf_url
+                    if is_pdf
+                    else job.optimized_resume_latex_url
+                )
             else:
                 raise BadRequestError(
                     "job_id is required to fetch the AI resume PDF"
@@ -504,20 +553,125 @@ class ResumeService(BaseService):
         else:
             raise BadRequestError(f"Unknown version: '{version}'")
 
-        if not pdf_url:
+        if not target_url:
             return GetResumeDownloadResponse(
                 version=version,
                 download_url=None,
-                message=f"No {version} resume PDF compiled yet",
+                message=f"No {version} resume {target_fmt} available yet",
             )
 
         download_url = r2_storage.generate_presigned_get_url(
-            r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS
+            r2_storage.key_from_url(target_url), PRESIGN_EXPIRY_SECONDS
         )
         return GetResumeDownloadResponse(
             version=version,
             download_url=download_url,
-            message=f"Use the download_url to fetch the {version} resume PDF",
+            message=f"Use the download_url to fetch the {version} resume {target_fmt}",
+        )
+
+    async def compile_custom_latex(
+        self, job_id: uuid.UUID, latex: str, user: User
+    ) -> GetResumeDownloadResponse:
+        """Compile custom LaTeX submitted from frontend, update .tex and .pdf in R2, and return presigned PDF GET URL."""
+        if not latex or not latex.strip():
+            raise BadRequestError("LaTeX content cannot be empty")
+
+        job = await self.job_repo.get_by_id(job_id)
+        if job is None:
+            raise NotFoundError("Job", str(job_id))
+        self.assert_ownership(job, user.id, "job")
+
+        # ── Slot allocation: reuse job's slot or allocate from slot_1, slot_2, slot_3 ──
+        assigned_slot = _slot_name_from_url(
+            job.optimized_resume_pdf_url
+        ) or _slot_name_from_url(job.optimized_resume_latex_url)
+
+        if not assigned_slot:
+            ai_jobs = await self.job_repo.list_jobs_with_ai_resumes(
+                user.id
+            )
+            used_slots: dict[str, Job] = {}
+            for j in ai_jobs:
+                s = _slot_name_from_url(
+                    j.optimized_resume_pdf_url
+                ) or _slot_name_from_url(j.optimized_resume_latex_url)
+                if s:
+                    used_slots[s] = j
+
+            free_slots = [s for s in _SLOTS if s not in used_slots]
+            if free_slots:
+                assigned_slot = free_slots[0]
+            else:
+                oldest_job = min(
+                    used_slots.values(),
+                    key=lambda j: j.updated_at or j.created_at,
+                )
+                assigned_slot = (
+                    _slot_name_from_url(
+                        oldest_job.optimized_resume_pdf_url
+                    )
+                    or _slot_name_from_url(
+                        oldest_job.optimized_resume_latex_url
+                    )
+                    or "slot_1"
+                )
+                await self.job_repo.update(
+                    oldest_job,
+                    optimized_resume_latex_url=None,
+                    optimized_resume_pdf_url=None,
+                )
+                logger.info(
+                    "ai_resume_slot_evicted user_id=%s evicted_job_id=%s freed_slot=%s",
+                    str(user.id),
+                    str(oldest_job.id),
+                    assigned_slot,
+                )
+
+        tex_key = f"resume/{user.id}/{assigned_slot}.tex"
+        pdf_key = f"resume/{user.id}/{assigned_slot}.pdf"
+
+        # 1. Upload LaTeX to R2
+        latex_url = r2_storage.upload_text(
+            tex_key, latex, RESUME_TEX_CONTENT_TYPE
+        )
+
+        # 2. Compile to PDF
+        pdf_bytes = await _compile_latex_to_pdf_via_api(latex, self.db)
+        pdf_url = None
+        if pdf_bytes:
+            pdf_url = r2_storage.upload_bytes(
+                pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE
+            )
+        else:
+            logger.warning(
+                "compile_custom_latex_pdf_failed job_id=%s slot=%s",
+                str(job_id),
+                assigned_slot,
+            )
+
+        # 3. Update Job in DB
+        await self.job_repo.update(
+            job,
+            optimized_resume_latex_url=latex_url,
+            optimized_resume_pdf_url=pdf_url,
+        )
+
+        download_url = (
+            r2_storage.generate_presigned_get_url(
+                r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS
+            )
+            if pdf_url
+            else None
+        )
+
+        return GetResumeDownloadResponse(
+            version="ai",
+            download_url=download_url,
+            message=(
+                "LaTeX saved and PDF compiled successfully"
+                if pdf_url
+                else "LaTeX saved to R2, but PDF compilation failed"
+            ),
         )
 
 
