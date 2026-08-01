@@ -87,3 +87,32 @@ async def test_update_me_requires_provider_for_key():
 
     with pytest.raises(BadRequestError):
         await svc.update_me(user, req)
+
+
+@pytest.mark.asyncio
+async def test_update_linkedin_message_success():
+    user = make_user()
+    db = AsyncMock()
+    msg = "Hi! I noticed your team is hiring and would love to connect."
+
+    with patch("app.users.service.UserRepository") as MockRepo:
+        mock_repo = AsyncMock()
+        mock_repo.update = AsyncMock(
+            return_value=make_user(linkedin_message=msg)
+        )
+        MockRepo.return_value = mock_repo
+        svc = UserService(db=db)
+        profile = await svc.update_linkedin_message(user, msg)
+        assert profile.linkedin_message == msg
+        mock_repo.update.assert_called_once_with(user, linkedin_message=msg)
+
+
+@pytest.mark.asyncio
+async def test_update_linkedin_message_rejects_empty():
+    user = make_user()
+    db = AsyncMock()
+    svc = UserService(db=db)
+    from app.common.exceptions import BadRequestError
+
+    with pytest.raises(BadRequestError):
+        await svc.update_linkedin_message(user, "   ")

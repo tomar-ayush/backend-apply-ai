@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.common.dependencies import get_current_user
 from app.users.models import User
-from app.users.schemas import UserProfile, UpdateUserRequest
+from app.users.schemas import (
+    UserProfile,
+    UpdateUserRequest,
+    UpdateLinkedinMessageRequest,
+)
 from app.users.service import UserService
 
 router = APIRouter()
@@ -24,3 +28,15 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     return await UserService(db).update_me(current_user, req)
+
+
+@router.patch("/me/linkedin-message", response_model=UserProfile)
+async def update_linkedin_message(
+    req: UpdateLinkedinMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the user's default LinkedIn connection request message."""
+    return await UserService(db).update_linkedin_message(
+        current_user, req.linkedin_message
+    )

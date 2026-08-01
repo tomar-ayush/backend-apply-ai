@@ -26,6 +26,7 @@ def make_user(**kwargs):
         years_of_experience=None,
         skills=None,
         education=None,
+        linkedin_message="I'm exploring opportunities and would love to connect",
         # Resume storage
         original_resume_pdf_url=None,
         original_resume_latex_url=None,

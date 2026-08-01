@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.service import BaseService
 from app.common.security import encrypt, decrypt
-from app.users.models import User
+from app.users.models import User, DEFAULT_LINKEDIN_MESSAGE
 from app.users.repository import UserRepository
 from app.users.schemas import UserProfile, UpdateUserRequest
 from app.common.exceptions import NotFoundError, BadRequestError
@@ -65,6 +65,7 @@ class UserService(BaseService):
             years_of_experience=user.years_of_experience,
             skills=user.skills,
             education=user.education,
+            linkedin_message=user.linkedin_message or DEFAULT_LINKEDIN_MESSAGE,
             original_resume_pdf_url=user.original_resume_pdf_url,
             original_resume_latex_url=user.original_resume_latex_url,
             llm_provider=user.llm_provider,
@@ -106,4 +107,14 @@ class UserService(BaseService):
             updates[attr] = encrypt(req.llm_api_key)
 
         updated = await self.repo.update(user, **updates)
+        return self._to_profile(updated)
+
+    async def update_linkedin_message(
+        self, user: User, linkedin_message: str
+    ) -> UserProfile:
+        if not linkedin_message or not linkedin_message.strip():
+            raise BadRequestError("LinkedIn message cannot be empty")
+        updated = await self.repo.update(
+            user, linkedin_message=linkedin_message.strip()
+        )
         return self._to_profile(updated)

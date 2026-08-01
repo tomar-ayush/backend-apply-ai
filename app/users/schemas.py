@@ -14,6 +14,9 @@ SUPPORTED_LLM_PROVIDERS = {
 }
 
 
+DEFAULT_LINKEDIN_MESSAGE = "I'm exploring opportunities and would love to connect"
+
+
 class UserProfile(BaseModel):
     id: uuid.UUID
     email: EmailStr
@@ -36,6 +39,7 @@ class UserProfile(BaseModel):
     years_of_experience: Optional[int] = None
     skills: Optional[Dict[str, Any]] = None
     education: Optional[Dict[str, Any]] = None
+    linkedin_message: str = DEFAULT_LINKEDIN_MESSAGE
 
     # Resume
     original_resume_pdf_url: Optional[str] = None
@@ -74,6 +78,7 @@ class UpdateUserRequest(BaseModel):
     years_of_experience: Optional[int] = None
     skills: Optional[Dict[str, Any]] = None
     education: Optional[Dict[str, Any]] = None
+    linkedin_message: Optional[str] = None
 
     llm_provider: Optional[str] = None
     current_llm_model: Optional[str] = None
@@ -87,3 +92,7 @@ class UpdateUserRequest(BaseModel):
                 f"llm_provider must be one of: {', '.join(sorted(SUPPORTED_LLM_PROVIDERS))}"
             )
         return v.lower() if v else v
+
+
+class UpdateLinkedinMessageRequest(BaseModel):
+    linkedin_message: str

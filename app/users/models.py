@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from app.tasks.models import Task
 
 
+DEFAULT_LINKEDIN_MESSAGE = "I'm exploring opportunities and would love to connect"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -44,6 +47,12 @@ class User(Base):
     years_of_experience: Mapped[Optional[int]] = mapped_column()
     skills: Mapped[Optional[dict]] = mapped_column(JSON)
     education: Mapped[Optional[dict]] = mapped_column(JSON)
+    linkedin_message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default=DEFAULT_LINKEDIN_MESSAGE,
+        server_default=DEFAULT_LINKEDIN_MESSAGE,
+    )
 
     # Resume storage (Cloudflare R2 keys)
     original_resume_latex_url: Mapped[Optional[str]] = mapped_column(
