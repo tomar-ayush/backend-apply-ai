@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Dict
+from typing import List, Optional, Dict
 
 
 class Skills(BaseModel):
@@ -8,6 +8,15 @@ class Skills(BaseModel):
     )
     preferred: List[str] = Field(
         description="List of preferred, optional, or nice-to-have skills."
+    )
+
+
+class TopicLearning(BaseModel):
+    topic: str = Field(
+        description="Name of the technical or domain topic, e.g., 'Python & Async', 'System Design'."
+    )
+    questions: List[str] = Field(
+        description="List of 3 to 5 relevant interview questions for this topic."
     )
 
 
@@ -32,6 +41,6 @@ class JobParseSchema(BaseModel):
     llm_summary: str = Field(
         description="A brief 2-3 sentence summary highlighting the distinctive responsibilities of the position."
     )
-    learning: Dict[str, List[str]] = Field(
-        description="Topic name -> list of challenging, frequently-asked interview questions (the {topic: [questions]} format)."
+    learning: List[TopicLearning] = Field(
+        description="3 to 5 topics with standard interview questions for each topic."
     )

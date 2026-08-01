@@ -1,24 +1,17 @@
 import uuid
 from typing import Optional, List
 
-from sqlalchemy import select
+from sqlalchemy import select, asc, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.referrals.models import Referral, ReferralStatus
+from app.common.repository import BaseRepository
 from app.common.exceptions import BadRequestError
+from app.referrals.models import Referral, ReferralStatus
 
 
-class ReferralRepository:
+class ReferralRepository(BaseRepository[Referral]):
     def __init__(self, db: AsyncSession):
-        self.db = db
-
-    async def get_by_id(
-        self, referral_id: str | uuid.UUID
-    ) -> Optional[Referral]:
-        result = await self.db.execute(
-            select(Referral).where(Referral.id == referral_id)
-        )
-        return result.scalar_one_or_none()
+        super().__init__(db, Referral)
 
     async def list_for_job(
         self, job_id: str | uuid.UUID
@@ -46,8 +39,6 @@ class ReferralRepository:
         priority ascending as the secondary sort inside each group. This
         surfaces the most actionable referrals on top.
         """
-        from sqlalchemy import asc, desc, case
-
         if order_by == "status":
             # Lower rank = shown first.
             status_rank = case(
@@ -91,13 +82,6 @@ class ReferralRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def create(self, **kwargs) -> Referral:
-        referral = Referral(**kwargs)
-        self.db.add(referral)
-        await self.db.flush()
-        await self.db.refresh(referral)
-        return referral
-
     async def create_many(self, records: List[dict]) -> List[Referral]:
         referrals = [Referral(**r) for r in records]
         self.db.add_all(referrals)
@@ -105,14 +89,3 @@ class ReferralRepository:
         for r in referrals:
             await self.db.refresh(r)
         return referrals
-
-    async def delete(self, referral: Referral) -> None:
-        await self.db.delete(referral)
-        await self.db.flush()
-
-    async def update(self, referral: Referral, **kwargs) -> Referral:
-        for key, value in kwargs.items():
-            setattr(referral, key, value)
-        await self.db.flush()
-        await self.db.refresh(referral)
-        return referral

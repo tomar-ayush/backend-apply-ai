@@ -1,23 +1,18 @@
 import uuid
 from typing import Optional, List
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.common.repository import BaseRepository
 from app.jobs.models import Job, JobStatus
 from app.job_jd.models import JobJD
 
 
-class JobRepository:
+class JobRepository(BaseRepository[Job]):
     def __init__(self, db: AsyncSession):
-        self.db = db
-
-    async def get_by_id(self, job_id: str | uuid.UUID) -> Optional[Job]:
-        result = await self.db.execute(
-            select(Job).where(Job.id == job_id)
-        )
-        return result.scalar_one_or_none()
+        super().__init__(db, Job)
 
     async def get_by_id_and_user(
         self, job_id: str | uuid.UUID, user_id: str | uuid.UUID
@@ -74,8 +69,6 @@ class JobRepository:
         user_id: str | uuid.UUID,
         status: Optional[JobStatus] = None,
     ) -> int:
-        from sqlalchemy import func
-
         q = (
             select(func.count())
             .select_from(Job)
@@ -85,21 +78,3 @@ class JobRepository:
             q = q.where(Job.status == status)
         result = await self.db.execute(q)
         return result.scalar_one()
-
-    async def create(self, **kwargs) -> Job:
-        job = Job(**kwargs)
-        self.db.add(job)
-        await self.db.flush()
-        await self.db.refresh(job)
-        return job
-
-    async def update(self, job: Job, **kwargs) -> Job:
-        for key, value in kwargs.items():
-            setattr(job, key, value)
-        await self.db.flush()
-        await self.db.refresh(job)
-        return job
-
-    async def delete(self, job: Job) -> None:
-        await self.db.delete(job)
-        await self.db.flush()

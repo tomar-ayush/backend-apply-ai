@@ -86,12 +86,7 @@ async def get_jd(
     db: AsyncSession = Depends(get_db),
 ):
     await JobService(db).get(job_id, current_user)
-    jd = await JobJDService(db).get_by_job_id(job_id)
-    if jd is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Job JD not found")
-    return jd
+    return await JobJDService(db).get_by_job_id(job_id)
 
 
 @router.post("/{job_id}/parse", response_model=JobJDResponse)

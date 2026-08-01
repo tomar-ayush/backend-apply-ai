@@ -20,7 +20,7 @@ from app.common.exceptions import (
     BadRequestError,
     ExternalServiceError,
 )
-from app.users.service import UserService
+from app.users.service import get_decrypted_llm_key
 
 logger = get_logger(__name__)
 
@@ -203,11 +203,12 @@ class JobJDService:
         user: User,
         ai: bool = True,
     ) -> JobJD:
-        user_svc = UserService(None)
-        llm_key = user_svc.get_decrypted_llm_key(user)
+        llm_key = get_decrypted_llm_key(user)
         if not llm_key or not user.llm_provider:
-            logger.info(
-                "[ERROR]: LLM provider and API key must be configured in your profile"
+            logger.warning(
+                "jd_parse_no_llm_key job_id=%s user_id=%s",
+                str(job_id),
+                str(user.id),
             )
             raise BadRequestError(
                 "LLM provider and API key must be configured in your profile"
@@ -331,6 +332,15 @@ class JobJDService:
             for q in extracted_department
         ]
 
+        learning_raw = parsed.get("learning")
+        learning_dict: dict = {}
+        if isinstance(learning_raw, list):
+            for item in learning_raw:
+                if isinstance(item, dict) and "topic" in item and "questions" in item:
+                    learning_dict[item["topic"]] = item["questions"]
+        elif isinstance(learning_raw, dict):
+            learning_dict = learning_raw
+
         jd = await self.repo.upsert(
             job_id=job_id,
             raw_html=raw_html[:50000],
@@ -342,12 +352,12 @@ class JobJDService:
             keywords=parsed.get("keywords"),
             extracted_department=extracted_department,
             llm_summary=parsed.get("llm_summary"),
-            learning=parsed.get("learning"),
+            learning=learning_dict,
         )
         logger.info(
             "jd_parsed job_id=%s ai=True has_learning=%s",
             str(job_id),
-            bool(parsed.get("learning")),
+            bool(learning_dict),
         )
         return jd, parsed
 

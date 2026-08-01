@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from sqlalchemy import (
     String,
@@ -15,7 +15,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database.session import Base
-from app.jobs.models import Job
+
+if TYPE_CHECKING:
+    from app.jobs.models import Job
 
 
 class JobJD(Base):

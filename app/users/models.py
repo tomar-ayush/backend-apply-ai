@@ -1,12 +1,16 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 
 from sqlalchemy import String, Text, JSON, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database.session import Base
+
+if TYPE_CHECKING:
+    from app.jobs.models import Job
+    from app.tasks.models import Task
 
 
 class User(Base):
@@ -74,7 +78,3 @@ class User(Base):
     tasks: Mapped[List["Task"]] = relationship(
         "Task", back_populates="user", cascade="all, delete-orphan"
     )
-
-
-from app.jobs.models import Job
-from app.tasks.models import Task

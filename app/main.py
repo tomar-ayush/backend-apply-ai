@@ -11,6 +11,7 @@ from app.jobs.router import router as jobs_router
 from app.referrals.router import router as referrals_router
 from app.tasks.router import router as tasks_router
 from app.resumes.router import router as resumes_router
+from app.events.router import router as events_router
 
 configure_logging()
 logger = get_logger(__name__)
@@ -66,6 +67,7 @@ app.include_router(
 )
 app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 app.include_router(resumes_router, prefix="/resumes", tags=["resumes"])
+app.include_router(events_router, prefix="", tags=["events"])
 
 
 @app.get("/health", tags=["health"])

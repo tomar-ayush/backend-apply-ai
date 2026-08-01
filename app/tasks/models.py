@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from typing import Optional, Set
+from typing import Optional, Set, TYPE_CHECKING
 
 from sqlalchemy import (
     String,
@@ -15,6 +15,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from app.database.session import Base
+from app.common.state_machine import StateMachine
+
+if TYPE_CHECKING:
+    from app.jobs.models import Job
+    from app.users.models import User
 
 
 class TaskType(str, enum.Enum):
@@ -47,11 +52,15 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, Set[TaskStatus]] = {
     TaskStatus.FAILED: set(),
 }
 
+task_state_machine = StateMachine(
+    VALID_TASK_TRANSITIONS, terminal=TERMINAL_TASK_STATUSES
+)
+
 
 def is_valid_task_transition(
     current: TaskStatus, next_status: TaskStatus
 ) -> bool:
-    return next_status in VALID_TASK_TRANSITIONS.get(current, set())
+    return task_state_machine.is_valid(current, next_status)
 
 
 class Task(Base):
@@ -97,7 +106,3 @@ class Task(Base):
 
     job: Mapped["Job"] = relationship("Job", back_populates="tasks")
     user: Mapped["User"] = relationship("User", back_populates="tasks")
-
-
-from app.jobs.models import Job
-from app.users.models import User

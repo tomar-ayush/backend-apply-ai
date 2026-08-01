@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Optional, Any
 
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, field_validator
 
 from app.jobs.models import JobStatus
+from app.common.validators import is_http_url
 
 
 class CreateJobRequest(BaseModel):
@@ -14,7 +15,7 @@ class CreateJobRequest(BaseModel):
     @field_validator("workday_url")
     @classmethod
     def validate_url(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
+        if not is_http_url(v):
             raise ValueError(
                 "workday_url must be a valid HTTP/HTTPS URL"
             )

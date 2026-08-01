@@ -1,71 +1,63 @@
 import uuid
 from app.common.logging import get_logger
-from typing import List, Optional
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.service import BaseService
+from app.common.events import event_bus
+from app.common.exceptions import (
+    NotFoundError,
+    InvalidTransitionError,
+)
 from app.jobs.models import Job, JobStatus, is_valid_job_transition
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import (
     CreateJobRequest,
-    JobResponse,
     JobDetailResponse,
     JobListResponse,
 )
 from app.job_jd.service import JobJDService
 from app.users.models import User
-from app.common.exceptions import (
-    NotFoundError,
-    InvalidTransitionError,
-    ForbiddenError,
-)
 
 logger = get_logger(__name__)
 
 
-class JobService:
+class JobService(BaseService):
     def __init__(self, db: AsyncSession):
-        self.db = db
+        super().__init__(db)
         self.repo = JobRepository(db)
-
-    def _assert_ownership(self, job: Job, user_id: uuid.UUID) -> None:
-        if job.user_id != user_id:
-            raise ForbiddenError("You do not have access to this job")
 
     async def create(
         self, req: CreateJobRequest, user: User
     ) -> JobDetailResponse:
-        try:
-            job = Job(
-                user_id=user.id,
-                workday_url=req.workday_url,
-                status=JobStatus.NEW,
-            )
-            self.db.add(job)
-            await self.db.flush()
+        job = Job(
+            user_id=user.id,
+            workday_url=req.workday_url,
+            status=JobStatus.NEW,
+        )
+        self.db.add(job)
+        await self.db.flush()
 
-            jd_svc = JobJDService(self.db)
+        jd_svc = JobJDService(self.db)
+        try:
             jd, _ = await jd_svc.parse_and_store(
                 job.id, req.workday_url, user, ai=req.ai
             )
-
             job.status = JobStatus.JD_PARSED
             await self.db.flush()
-
             logger.info(
                 "job_created job_id=%s user_id=%s",
                 str(job.id),
                 str(user.id),
             )
             await self.db.refresh(job)
-
             return JobDetailResponse.from_job(job, jd)
-        except Exception as e:
-            # log and re-raise so the outer dependency session can rollback
-            logger.info(
-                "[Warning] jd_parse_failed_on_create job_id=%s error=%s",
+        except Exception:
+            logger.warning(
+                "job_create_jd_parse_failed job_id=%s user_id=%s",
+                str(job.id),
                 str(user.id),
-                str(e),
             )
             raise
 
@@ -85,7 +77,7 @@ class JobService:
         job = await self.repo.get_by_id(job_id)
         if job is None:
             raise NotFoundError("Job", str(job_id))
-        self._assert_ownership(job, user.id)
+        self.assert_ownership(job, user.id, "job")
         return job
 
     async def delete(self, job_id: uuid.UUID, user: User) -> None:
@@ -101,17 +93,27 @@ class JobService:
             raise InvalidTransitionError(
                 job.status.value, new_status.value
             )
-        # Setting the status to REFERRAL_RECEIVED flips the referral_received
-        # flag to True; any other status leaves it as-is (it is never reset).
+
         kwargs = {"status": new_status}
         if new_status == JobStatus.REFERRAL_RECEIVED:
             kwargs["referral_received"] = True
+
         await self.repo.update(job, **kwargs)
         logger.info(
-            "job_status_updated job_id=%s status=%s referral_received=%s",
+            "job_status_updated job_id=%s status=%s",
             str(job_id),
             new_status.value,
-            job.referral_received,
+        )
+
+        # Push real-time update so the frontend can invalidate TanStack Query
+        # instead of polling.
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "job_status_updated",
+                "job_id": str(job_id),
+                "status": new_status.value,
+            },
         )
         return job
 

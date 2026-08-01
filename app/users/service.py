@@ -4,10 +4,11 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.service import BaseService
+from app.common.security import encrypt, decrypt
 from app.users.models import User
 from app.users.repository import UserRepository
 from app.users.schemas import UserProfile, UpdateUserRequest
-from app.common.security import encrypt, decrypt
 from app.common.exceptions import NotFoundError, BadRequestError
 
 logger = get_logger(__name__)
@@ -23,16 +24,27 @@ PROVIDER_KEY_ATTR = {
 }
 
 
-class UserService:
-    def __init__(self, db: Optional[AsyncSession]):
-        self._db = db
-        self._repo: Optional[UserRepository] = None
+def get_decrypted_llm_key(user: User) -> Optional[str]:
+    """Return the decrypted LLM API key for *user* without touching the DB."""
+    provider = (user.llm_provider or "").lower()
+    attr = PROVIDER_KEY_ATTR.get(provider)
+    if not attr:
+        return None
+    enc = getattr(user, attr, None)
+    if not enc:
+        return None
+    try:
+        return decrypt(enc)
+    except Exception:
+        return enc
 
-    @property
-    def repo(self) -> UserRepository:
-        if self._repo is None:
-            self._repo = UserRepository(self._db)
-        return self._repo
+
+class UserService(BaseService):
+    get_decrypted_llm_key = staticmethod(get_decrypted_llm_key)
+
+    def __init__(self, db: AsyncSession):
+        super().__init__(db)
+        self.repo = UserRepository(db)
 
     def _to_profile(self, user: User) -> UserProfile:
         return UserProfile(
@@ -57,11 +69,7 @@ class UserService:
             original_resume_latex_url=user.original_resume_latex_url,
             llm_provider=user.llm_provider,
             current_llm_model=user.current_llm_model,
-            has_llm_api_key=bool(
-                self._encrypted_key_for_provider(
-                    user, user.llm_provider
-                )
-            ),
+            has_llm_api_key=bool(get_decrypted_llm_key(user)),
             has_openrouter_key=bool(user.openrouter_llm_api_key),
             has_openai_key=bool(user.openai_llm_api_key),
             has_gemini_key=bool(user.gemini_llm_api_key),
@@ -81,15 +89,6 @@ class UserService:
             return None
         return PROVIDER_KEY_ATTR.get(provider.lower())
 
-    @staticmethod
-    def _encrypted_key_for_provider(
-        user: User, provider: Optional[str]
-    ) -> Optional[str]:
-        attr = UserService._key_attr_for_provider(provider)
-        if not attr:
-            return None
-        return getattr(user, attr, None)
-
     async def update_me(
         self, user: User, req: UpdateUserRequest
     ) -> UserProfile:
@@ -108,9 +107,3 @@ class UserService:
 
         updated = await self.repo.update(user, **updates)
         return self._to_profile(updated)
-
-    def get_decrypted_llm_key(self, user: User) -> Optional[str]:
-        enc = self._encrypted_key_for_provider(user, user.llm_provider)
-        if not enc:
-            return None
-        return decrypt(enc)

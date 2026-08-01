@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from typing import Optional, List, Set
+from typing import Optional, List, Set, TYPE_CHECKING
 
 from sqlalchemy import (
     Text,
@@ -16,6 +16,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database.session import Base
+from app.common.state_machine import StateMachine
+
+if TYPE_CHECKING:
+    from app.users.models import User
+    from app.job_jd.models import JobJD
+    from app.referrals.models import Referral
+    from app.tasks.models import Task
 
 
 class JobStatus(str, enum.Enum):
@@ -51,11 +58,13 @@ VALID_JOB_TRANSITIONS: dict[JobStatus, Set[JobStatus]] = {
     JobStatus.WITHDRAWN: set(),
 }
 
+job_state_machine = StateMachine(VALID_JOB_TRANSITIONS)
+
 
 def is_valid_job_transition(
     current: JobStatus, next_status: JobStatus
 ) -> bool:
-    return next_status in VALID_JOB_TRANSITIONS.get(current, set())
+    return job_state_machine.is_valid(current, next_status)
 
 
 class Job(Base):
@@ -112,9 +121,3 @@ class Job(Base):
     tasks: Mapped[List["Task"]] = relationship(
         "Task", back_populates="job", cascade="all, delete-orphan"
     )
-
-
-from app.users.models import User
-from app.job_jd.models import JobJD
-from app.referrals.models import Referral
-from app.tasks.models import Task

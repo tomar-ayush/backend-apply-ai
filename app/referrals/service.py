@@ -11,10 +11,15 @@ import httpx
 import http.client
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.service import BaseService
+from app.common.events import event_bus
+from app.common.state_machine import StateMachine
+from app.common.validators import normalize_linkedin_url
 from app.referrals.models import (
     Referral,
     ReferralStatus,
     is_valid_referral_transition,
+    referral_state_machine,
 )
 from app.referrals.repository import ReferralRepository
 from app.referrals.schemas import (
@@ -38,6 +43,11 @@ from app.config import settings
 from ddgs import DDGS
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Search helpers (pure functions, no state)
+# ---------------------------------------------------------------------------
 
 
 def _render_stored_query(query: str, company: str) -> str:
@@ -74,11 +84,8 @@ def _build_referral_queries(
             for index, query in enumerate(queries[:10])
         ]
 
-    # Fallback: scope to the company and the job's role/department keywords
-    # so we target relevant managers/leads rather than any "Manager".
     role_kw = ""
     if role:
-        # Use the first two meaningful words of the role as keywords.
         words = [w for w in role.lower().split() if len(w) > 3][:2]
         if words:
             role_kw = " ".join(words)
@@ -97,33 +104,6 @@ def _build_referral_queries(
     return [(fallback, 1)]
 
 
-def _normalize_linkedin_url(url: str) -> str:
-    """Normalize a LinkedIn profile URL to the canonical www form with a trailing slash.
-
-    Strips country-code / locale subdomains (in.linkedin.com, uk.linkedin.com, …)
-    and ensures a single trailing slash, so the same profile is never stored twice
-    under different host variants.
-    """
-    if not url:
-        return url
-    try:
-        parsed = urlparse(url.strip())
-    except Exception:
-        return url.strip()
-
-    host = parsed.netloc.lower()
-    if host.endswith("linkedin.com"):
-        host = "www.linkedin.com"
-
-    path = parsed.path
-    if not path.startswith("/"):
-        path = "/" + path
-    if not path.endswith("/"):
-        path = path + "/"
-
-    return urlunparse(("https", host, path, "", "", ""))
-
-
 def _extract_linkedin_candidates(items) -> list[dict]:
     """Parse DDG search results into candidate dicts.
 
@@ -132,7 +112,6 @@ def _extract_linkedin_candidates(items) -> list[dict]:
     """
     candidates = []
     for item in items or []:
-        # DDG uses 'href'; Google CSE uses 'link' — support both
         link = item.get("href") or item.get("link", "")
         if "linkedin.com/in/" not in link:
             continue
@@ -142,7 +121,6 @@ def _extract_linkedin_candidates(items) -> list[dict]:
             if " - " in title
             else title.strip()
         )
-        # Reject obvious non-person titles
         if not name or any(
             bad in name.lower()
             for bad in ("job", "posting", "position", "opening")
@@ -151,19 +129,14 @@ def _extract_linkedin_candidates(items) -> list[dict]:
         candidates.append(
             {
                 "name": name,
-                "linkedin_url": _normalize_linkedin_url(link),
+                "linkedin_url": normalize_linkedin_url(link),
             }
         )
     return candidates
 
 
 def _search_serper(query: str, max_results: int = 10) -> list[dict]:
-    """Search Google via the Serper API and return DDG-shaped result items.
-
-    Returns a list of dicts with 'href' and 'title' keys so the existing
-    candidate parser can consume them unchanged. Returns [] on any failure.
-    No artificial result cap is imposed — Serper returns what it finds.
-    """
+    """Search Google via the Serper API and return DDG-shaped result items."""
     if not settings.SERPER_API_KEY:
         logger.warning(
             "serper_skipped query=%s reason=SERPER_API_KEY not configured",
@@ -207,11 +180,7 @@ def _search_serper(query: str, max_results: int = 10) -> list[dict]:
 def _search_linkedin_candidates(
     query: str, max_results: int = 10
 ) -> list[dict]:
-    """Search for LinkedIn profiles, preferring Serper (Google) with DDGS fallback.
-
-    Returns parsed candidate dicts (name + linkedin_url).
-    """
-
+    """Search for LinkedIn profiles, preferring Serper (Google) with DDGS fallback."""
     logger.info("query passing to serper: %s", query)
     items = _search_serper(query, max_results)
     if not items:
@@ -231,12 +200,17 @@ def _search_linkedin_candidates(
     return _extract_linkedin_candidates(items)
 
 
+# ---------------------------------------------------------------------------
+# Deduplication
+# ---------------------------------------------------------------------------
+
+
 class _DedupFilter:
     """Tracks referral identity keys (name + normalized URL) for a job so the
     same person is never stored twice — across the DB and within a single run.
     """
 
-    def __init__(self, existing: List["Referral"]):
+    def __init__(self, existing: List[Referral]):
         self.names = {
             (r.name or "").strip().lower() for r in existing if r.name
         }
@@ -258,9 +232,14 @@ class _DedupFilter:
             self.urls.add(url)
 
 
-class ReferralService:
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
+
+class ReferralService(BaseService):
     def __init__(self, db: AsyncSession):
-        self.db = db
+        super().__init__(db)
         self.repo = ReferralRepository(db)
 
     async def generate(
@@ -282,8 +261,6 @@ class ReferralService:
         role = jd.role
         extracted_department = jd.extracted_department or []
 
-        # Load existing referrals for this job so we don't create duplicates
-        # (by name or by normalized LinkedIn URL).
         dedup = _DedupFilter(await self.repo.list_for_job(job.id))
 
         queries = _build_referral_queries(
@@ -359,6 +336,15 @@ class ReferralService:
             len(referrals),
         )
 
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "referrals_generated",
+                "job_id": str(job.id),
+                "count": len(referrals),
+            },
+        )
+
         return GenerateReferralsResponse(
             generated=len(referrals),
             referrals=[
@@ -372,13 +358,6 @@ class ReferralService:
         order_by: Optional[str] = "priority",
         descending: bool = False,
     ) -> List[Referral]:
-        """List referrals for a job, sorted by the requested column.
-
-        Defaults to priority ascending (most referable first). `order_by` and
-        `descending` are passed through to the repository so callers can sort
-        by any Referral column (e.g. "name", "created_at") without breaking
-        existing callers.
-        """
         return await self.repo.list_by_job(
             job_id, order_by=order_by, descending=descending
         )
@@ -386,15 +365,9 @@ class ReferralService:
     async def create_many_referrals(
         self,
         job: Job,
-        referrals: List["CreateReferralRequest"],
+        referrals: List[CreateReferralRequest],
     ) -> List[Referral]:
-        """Persist a list of user-provided referrals for a job.
-
-        Each entry is normalized (LinkedIn URL canonicalization) and stored
-        with the job id. Entries that duplicate an existing referral for the
-        same job — by name (case-insensitive) or by normalized LinkedIn URL —
-        are skipped so the same person is never stored twice.
-        """
+        """Persist a list of user-provided referrals for a job."""
         dedup = _DedupFilter(await self.repo.list_for_job(job.id))
 
         records = []
@@ -402,11 +375,10 @@ class ReferralService:
         for r in referrals:
             name = (r.name or "").strip()
             url = (
-                _normalize_linkedin_url(r.linkedin_url)
+                normalize_linkedin_url(r.linkedin_url)
                 if r.linkedin_url
                 else None
             )
-            # Skip if the name or the normalized URL already exists for this job.
             if dedup.is_duplicate(name, url):
                 skipped += 1
                 continue
@@ -418,7 +390,6 @@ class ReferralService:
                     "priority": r.priority,
                 }
             )
-            # Track locally so duplicates within the same batch are also caught.
             dedup.add(name, url)
 
         if not records:
@@ -470,7 +441,7 @@ class ReferralService:
 
         updates: dict = {"status": req.status}
         if req.linkedin_url is not None:
-            updates["linkedin_url"] = _normalize_linkedin_url(
+            updates["linkedin_url"] = normalize_linkedin_url(
                 req.linkedin_url
             )
 
@@ -484,7 +455,23 @@ class ReferralService:
         ):
             updates["responded_at"] = now
 
-        return await self.repo.update(referral, **updates)
+        updated = await self.repo.update(referral, **updates)
+        logger.info(
+            "referral_updated referral_id=%s status=%s",
+            str(referral_id),
+            req.status.value,
+        )
+
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "referral_updated",
+                "referral_id": str(referral_id),
+                "job_id": str(updated.job_id),
+                "status": req.status.value,
+            },
+        )
+        return updated
 
     async def delete(self, referral_id: uuid.UUID, user: User) -> None:
         referral = await self._get_and_assert_ownership(
@@ -495,4 +482,13 @@ class ReferralService:
             "referral_deleted referral_id=%s user_id=%s",
             str(referral_id),
             str(user.id),
+        )
+
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "referral_deleted",
+                "referral_id": str(referral_id),
+                "job_id": str(referral.job_id),
+            },
         )

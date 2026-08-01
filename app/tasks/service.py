@@ -6,12 +6,15 @@ from typing import List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.service import BaseService
+from app.common.events import event_bus
 from app.tasks.models import (
     Task,
     TaskType,
     TaskStatus,
     TERMINAL_TASK_STATUSES,
     is_valid_task_transition,
+    task_state_machine,
 )
 from app.tasks.repository import TaskRepository
 from app.tasks.schemas import (
@@ -20,14 +23,13 @@ from app.tasks.schemas import (
     TriggerWorkdayRequest,
     WorkdayCallbackRequest,
     TriggerLinkedinRequest,
-    TriggerLinkedinResponse,
     LinkedinCallbackRequest,
 )
 from app.jobs.repository import JobRepository
 from app.users.models import User
 from app.referrals.models import Referral, ReferralStatus
 from app.referrals.repository import ReferralRepository
-from app.referrals.service import _normalize_linkedin_url
+from app.common.validators import normalize_linkedin_url
 from app.common.exceptions import (
     NotFoundError,
     InvalidTransitionError,
@@ -44,11 +46,16 @@ from app.config import settings
 logger = get_logger(__name__)
 
 
-class TaskService:
+class TaskService(BaseService):
     def __init__(self, db: AsyncSession):
+        super().__init__(db)
         self.repo = TaskRepository(db)
         self.job_repo = JobRepository(db)
         self.referral_repo = ReferralRepository(db)
+
+    # ------------------------------------------------------------------
+    # CRUD
+    # ------------------------------------------------------------------
 
     async def create(self, req: CreateTaskRequest, user: User) -> Task:
         job = await self.job_repo.get_by_id_and_user(
@@ -75,21 +82,16 @@ class TaskService:
         task = await self.repo.get_by_id(task_id)
         if task is None:
             raise NotFoundError("Task", str(task_id))
-        if task.user_id != user.id:
-            raise ForbiddenError("You do not have access to this task")
+        self.assert_ownership(task, user.id, "task")
         return task
 
     async def update(
         self, task_id: uuid.UUID, req: UpdateTaskRequest, user: User
     ) -> Task:
-        task = await self.repo.get_by_id(task_id)
-        if task is None:
-            raise NotFoundError("Task", str(task_id))
-        if task.user_id != user.id:
-            raise ForbiddenError("You do not have access to this task")
+        task = await self.get(task_id, user)
 
         # Idempotency: ignore updates to terminal tasks
-        if task.status in TERMINAL_TASK_STATUSES:
+        if task_state_machine.is_terminal(task.status):
             logger.info(
                 "task_update_ignored_terminal task_id=%s current=%s requested=%s",
                 str(task_id),
@@ -113,16 +115,30 @@ class TaskService:
             str(task_id),
             req.status.value,
         )
+
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "task_updated",
+                "task_id": str(task_id),
+                "status": req.status.value,
+                "error_message": req.error_message,
+            },
+        )
         return task
+
+    async def delete(self, task_id: uuid.UUID, user: User) -> None:
+        task = await self.get(task_id, user)
+        await self.repo.delete(task)
+        logger.info("task_deleted task_id=%s", str(task_id))
+
+    # ------------------------------------------------------------------
+    # Workday automation
+    # ------------------------------------------------------------------
 
     async def trigger_workday(
         self, req: TriggerWorkdayRequest, user: User
     ) -> Task:
-        """Create a WORKDAY_APPLY task and dispatch it to the local worker.
-
-        Mirrors the referrals connect flow: a signed callback token is issued and
-        sent to the worker so it can report completion via the callback endpoint.
-        """
         job = await self.job_repo.get_by_id_and_user(
             req.job_id, user.id
         )
@@ -176,6 +192,15 @@ class TaskService:
             str(task.id),
             worker_url,
         )
+
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "task_started",
+                "task_id": str(task.id),
+                "task_type": TaskType.WORKDAY_APPLY.value,
+            },
+        )
         return task
 
     async def handle_workday_callback(
@@ -210,7 +235,22 @@ class TaskService:
                 req.error,
             )
 
-        return {"success": True, "state": req.state}
+        # Notify the owning user so their UI can refresh without polling.
+        await event_bus.publish(
+            f"user:{task.user_id}",
+            {
+                "type": "task_completed",
+                "task_id": str(task_id),
+                "task_type": TaskType.WORKDAY_APPLY.value,
+                "state": req.state.value,
+                "error": req.error,
+            },
+        )
+        return {"success": True, "state": req.state.value}
+
+    # ------------------------------------------------------------------
+    # LinkedIn connect
+    # ------------------------------------------------------------------
 
     async def trigger_linkedin(
         self,
@@ -218,13 +258,6 @@ class TaskService:
         req: TriggerLinkedinRequest,
         user: User,
     ) -> Referral:
-        """Dispatch the LinkedIn connect agent for a referral.
-
-        Mirrors the Workday trigger: a signed callback token is issued and sent to
-        the agent so it can report completion. Unlike Workday, no task row is
-        created — on callback we only update the referral's status
-        (see handle_linkedin_callback).
-        """
         referral = await self.referral_repo.get_by_id(referral_id)
         if referral is None:
             raise NotFoundError("Referral", str(referral_id))
@@ -232,7 +265,7 @@ class TaskService:
         callback_token = create_callback_token(str(referral_id))
         callback_url = f"{settings.API_BASE_URL.rstrip('/')}/tasks/referrals/{referral_id}/callback"
 
-        normalized_linkedin_url = _normalize_linkedin_url(
+        normalized_linkedin_url = normalize_linkedin_url(
             req.linkedin_url
         )
 
@@ -278,10 +311,20 @@ class TaskService:
 
         task = await self.repo.update(task, status=TaskStatus.RUNNING)
         logger.info(
-            "linkedin_agent_task_running referral_id=%s agent_url=%s, task_id=%s",
+            "linkedin_agent_task_running referral_id=%s agent_url=%s task_id=%s",
             str(referral_id),
             agent_url,
             str(task.id),
+        )
+
+        await event_bus.publish(
+            f"user:{user.id}",
+            {
+                "type": "task_started",
+                "task_id": str(task.id),
+                "task_type": TaskType.LINKEDIN_CONNECT.value,
+                "referral_id": str(referral_id),
+            },
         )
         return referral
 
@@ -321,4 +364,15 @@ class TaskService:
                 req.error,
             )
 
-        return {"success": True, "state": req.state}
+        await event_bus.publish(
+            f"user:{task.user_id}",
+            {
+                "type": "task_completed",
+                "task_id": str(req.task_id),
+                "task_type": TaskType.LINKEDIN_CONNECT.value,
+                "referral_id": str(referral_id),
+                "state": req.state.value,
+                "error": req.error,
+            },
+        )
+        return {"success": True, "state": req.state.value}

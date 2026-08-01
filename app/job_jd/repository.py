@@ -4,12 +4,13 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.repository import BaseRepository
 from app.job_jd.models import JobJD
 
 
-class JobJDRepository:
+class JobJDRepository(BaseRepository[JobJD]):
     def __init__(self, db: AsyncSession):
-        self.db = db
+        super().__init__(db, JobJD)
 
     async def get_by_job_id(
         self, job_id: str | uuid.UUID
@@ -18,20 +19,6 @@ class JobJDRepository:
             select(JobJD).where(JobJD.job_id == job_id)
         )
         return result.scalar_one_or_none()
-
-    async def create(self, **kwargs) -> JobJD:
-        jd = JobJD(**kwargs)
-        self.db.add(jd)
-        await self.db.flush()
-        await self.db.refresh(jd)
-        return jd
-
-    async def update(self, jd: JobJD, **kwargs) -> JobJD:
-        for key, value in kwargs.items():
-            setattr(jd, key, value)
-        await self.db.flush()
-        await self.db.refresh(jd)
-        return jd
 
     async def upsert(self, job_id: uuid.UUID, **kwargs) -> JobJD:
         existing = await self.get_by_job_id(job_id)
