@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 
 RESUME_SECTIONS = Literal[
-    "professional_summary", "skills", "work_experience", "projects"
+    "professional_summary", "skills", "work_experience", "projects", "education"
 ]
 
 

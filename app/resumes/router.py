@@ -1,7 +1,7 @@
 import uuid
-from typing import Literal
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_db
@@ -76,14 +76,16 @@ async def finalize_resume(
 
 
 @router.get(
-    "/download/{version}", response_model=GetResumeDownloadResponse
+    "/download/{version}/{job_id}",
+    response_model=GetResumeDownloadResponse,
 )
 async def get_resume_download_url(
     version: Literal["original", "ai"],
+    job_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return a presigned GET URL to download a stored resume copy."""
     return await ResumeService(db).get_download_url(
-        current_user, version
+        current_user, version, job_id=job_id
     )

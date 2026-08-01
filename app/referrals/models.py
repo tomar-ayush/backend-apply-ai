@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from typing import Optional, Set
+from typing import Optional, Set, TYPE_CHECKING
 
 from sqlalchemy import (
     String,
@@ -15,6 +15,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database.session import Base
+from app.common.state_machine import StateMachine
+
+if TYPE_CHECKING:
+    from app.jobs.models import Job
 
 
 class ReferralStatus(str, enum.Enum):
@@ -41,11 +45,13 @@ VALID_REFERRAL_TRANSITIONS: dict[
     ReferralStatus.DECLINED: set(),
 }
 
+referral_state_machine = StateMachine(VALID_REFERRAL_TRANSITIONS)
+
 
 def is_valid_referral_transition(
     current: ReferralStatus, next_status: ReferralStatus
 ) -> bool:
-    return next_status in VALID_REFERRAL_TRANSITIONS.get(current, set())
+    return referral_state_machine.is_valid(current, next_status)
 
 
 class Referral(Base):
@@ -80,6 +86,3 @@ class Referral(Base):
     )
 
     job: Mapped["Job"] = relationship("Job", back_populates="referrals")
-
-
-from app.jobs.models import Job

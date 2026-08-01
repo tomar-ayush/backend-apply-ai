@@ -144,3 +144,73 @@ Software Engineer
     # Ensure \section{Summary} is NOT uncommented into active LaTeX structure
     assert "\n\\section{Summary}" not in rebuilt
     assert "% \\section{Summary}" in rebuilt
+
+
+@pytest.mark.asyncio
+async def test_generate_ai_enforces_three_slots_limit():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import uuid
+    from datetime import datetime, timezone
+    from app.resumes.service import ResumeService
+    from tests.conftest import make_user, make_job
+
+    db = AsyncMock()
+    user = make_user(
+        original_resume_latex_url="https://r2.example.com/original.tex",
+        llm_provider="openai",
+    )
+    job_target = make_job(id=uuid.uuid4(), user_id=user.id)
+
+    # 3 existing jobs that ALREADY have AI resumes in slots 1, 2, 3
+    j1 = make_job(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        optimized_resume_pdf_url=f"https://r2/resume/{user.id}/slot_1.pdf",
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    j2 = make_job(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        optimized_resume_pdf_url=f"https://r2/resume/{user.id}/slot_2.pdf",
+        updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    j3 = make_job(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        optimized_resume_pdf_url=f"https://r2/resume/{user.id}/slot_3.pdf",
+        updated_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+    )
+
+    jd_mock = MagicMock()
+    jd_mock.raw_text = "Python developer role"
+
+    svc = ResumeService(db)
+    svc.job_repo.get_by_id = AsyncMock(return_value=job_target)
+    svc.job_repo.list_jobs_with_ai_resumes = AsyncMock(return_value=[j1, j2, j3])
+    svc.job_repo.update = AsyncMock()
+    svc.jd_repo.get_by_job_id = AsyncMock(return_value=jd_mock)
+
+    with patch("app.resumes.service.UserService.get_decrypted_llm_key", return_value="fake_key"):
+        with patch("app.storage.r2.r2_storage.download_text", return_value=SAMPLE_LATEX):
+            with patch("app.storage.r2.r2_storage.upload_text") as mock_upload_text:
+                with patch("app.storage.r2.r2_storage.upload_bytes") as mock_upload_bytes:
+                    mock_upload_text.return_value = f"https://r2/resume/{user.id}/slot_1.tex"
+                    mock_upload_bytes.return_value = f"https://r2/resume/{user.id}/slot_1.pdf"
+                    with patch("app.resumes.service._compile_latex_to_pdf_via_api", return_value=b"%PDF"):
+                        with patch("app.resumes.service.LLMClient") as MockLLM:
+                            mock_client = AsyncMock()
+                            mock_client.complete = AsyncMock(return_value="\\item Optimized skills")
+                            MockLLM.return_value = mock_client
+
+                            res = await svc.generate_ai(job_target.id, ["skills"], user)
+                            assert res.validated is True
+
+                            # Verify that oldest job (j1) was evicted to reuse slot_1
+                            svc.job_repo.update.assert_any_call(
+                                j1,
+                                optimized_resume_latex_url=None,
+                                optimized_resume_pdf_url=None,
+                            )
+                            # Verify uploaded to slot_1 key
+                            mock_upload_text.assert_called_once()
+                            assert f"resume/{user.id}/slot_1.tex" in mock_upload_text.call_args[0][0]

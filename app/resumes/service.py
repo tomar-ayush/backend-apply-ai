@@ -11,6 +11,7 @@ from app.common.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.jobs.models import Job
 from app.jobs.repository import JobRepository
 from app.job_jd.repository import JobJDRepository
 from app.users.models import User
@@ -36,7 +37,12 @@ from app.resumes.schemas import (
     GenerateAiResumeResponse,
     GetResumeDownloadResponse,
 )
-from app.common.exceptions import BadRequestError, NotFoundError
+from app.common.service import BaseService
+from app.common.exceptions import (
+    BadRequestError,
+    NotFoundError,
+    ForbiddenError,
+)
 
 logger = get_logger(__name__)
 
@@ -44,10 +50,21 @@ RESUME_TEX_CONTENT_TYPE = "text/x-tex"
 RESUME_PDF_CONTENT_TYPE = "application/pdf"
 PRESIGN_EXPIRY_SECONDS = 900
 
+_SLOTS = ["slot_1", "slot_2", "slot_3"]
 
-class ResumeService:
+
+def _slot_name_from_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    for s in _SLOTS:
+        if f"/{s}." in url:
+            return s
+    return None
+
+
+class ResumeService(BaseService):
     def __init__(self, db: AsyncSession):
-        self.db = db
+        super().__init__(db)
         self.job_repo = JobRepository(db)
         self.jd_repo = JobJDRepository(db)
 
@@ -164,6 +181,11 @@ class ResumeService:
                 "LLM provider and API key must be configured"
             )
 
+        job = await self.job_repo.get_by_id(job_id)
+        if job is None:
+            raise NotFoundError("Job", str(job_id))
+        self.assert_ownership(job, user.id, "job")
+
         if not user.original_resume_latex_url:
             raise BadRequestError(
                 "Original LaTeX resume must be uploaded before generating the AI resume"
@@ -179,6 +201,55 @@ class ResumeService:
             raise BadRequestError(
                 "Job description text is empty; parse the JD before generating a resume"
             )
+        # ── 3-slot AI resume limit per user (slot_1, slot_2, slot_3) ─────
+        assigned_slot = _slot_name_from_url(
+            job.optimized_resume_pdf_url
+        ) or _slot_name_from_url(job.optimized_resume_latex_url)
+
+        if not assigned_slot:
+            ai_jobs = await self.job_repo.list_jobs_with_ai_resumes(
+                user.id
+            )
+            used_slots: dict[str, Job] = {}
+            for j in ai_jobs:
+                s = _slot_name_from_url(
+                    j.optimized_resume_pdf_url
+                ) or _slot_name_from_url(j.optimized_resume_latex_url)
+                if s:
+                    used_slots[s] = j
+
+            free_slots = [s for s in _SLOTS if s not in used_slots]
+            if free_slots:
+                assigned_slot = free_slots[0]
+            else:
+                # All 3 slots are taken; evict least recently updated job
+                oldest_job = min(
+                    used_slots.values(),
+                    key=lambda j: j.updated_at or j.created_at,
+                )
+                assigned_slot = (
+                    _slot_name_from_url(
+                        oldest_job.optimized_resume_pdf_url
+                    )
+                    or _slot_name_from_url(
+                        oldest_job.optimized_resume_latex_url
+                    )
+                    or "slot_1"
+                )
+                await self.job_repo.update(
+                    oldest_job,
+                    optimized_resume_latex_url=None,
+                    optimized_resume_pdf_url=None,
+                )
+                logger.info(
+                    "ai_resume_slot_evicted user_id=%s evicted_job_id=%s freed_slot=%s",
+                    str(user.id),
+                    str(oldest_job.id),
+                    assigned_slot,
+                )
+
+        ai_tex_key = f"resume/{user.id}/{assigned_slot}.tex"
+        ai_pdf_key = f"resume/{user.id}/{assigned_slot}.pdf"
 
         latex_key = r2_storage.key_from_url(
             user.original_resume_latex_url
@@ -192,15 +263,15 @@ class ResumeService:
         parsed = _parse_latex_sections(original_latex)
         parsed_keys = {k: len(v) for k, v in parsed.items()}
         logger.info(
-            "ai_resume_generate_start job_id=%s user_id=%s sections=%s parsed_keys=%s",
+            "ai_resume_generate_start job_id=%s user_id=%s slot=%s sections=%s parsed_keys=%s",
             str(job_id),
             str(user.id),
+            assigned_slot,
             sections,
             parsed_keys,
         )
 
         # ── Step 2: filter to sections that actually exist ────────────
-        # "header" and "footer" are structural, not optimisable sections.
         _STRUCTURAL_KEYS = {"header", "footer"}
         valid_sections = [
             s
@@ -226,24 +297,21 @@ class ResumeService:
                 sections,
             )
             # Nothing to optimise – return the original resume as-is.
-            ai_key = self._resume_key(user.id, "ai", "tex")
             latex_url = r2_storage.upload_text(
-                ai_key, original_latex, RESUME_TEX_CONTENT_TYPE
+                ai_tex_key, original_latex, RESUME_TEX_CONTENT_TYPE
             )
             pdf_url = None
             pdf_bytes = await _compile_latex_to_pdf_via_api(
                 original_latex, self.db
             )
             if pdf_bytes:
-                pdf_key = self._resume_key(user.id, "ai", "pdf")
                 pdf_url = r2_storage.upload_bytes(
-                    pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE
+                    ai_pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE
                 )
-            user_repo = UserRepository(self.db)
-            await user_repo.update(
-                user,
-                ai_resume_latex_url=latex_url,
-                ai_resume_pdf_url=pdf_url,
+            await self.job_repo.update(
+                job,
+                optimized_resume_latex_url=latex_url,
+                optimized_resume_pdf_url=pdf_url,
             )
             download_url = (
                 r2_storage.generate_presigned_get_url(
@@ -273,7 +341,6 @@ class ResumeService:
 
             block = parsed.get(section)
 
-            # Guard: block must exist and contain more than just whitespace.
             if not block or not block.strip():
                 logger.warning(
                     "ai_resume_section_absent job_id=%s section=%s "
@@ -283,10 +350,6 @@ class ResumeService:
                 )
                 return section, None
 
-            # Guard: if the block is only a heading with no body content,
-            # log it but still allow the LLM to generate from the JD
-            # (the heading exists in the original, so reconstruction can
-            # place the output correctly).
             body_only = _section_body(block)
             if not body_only.strip():
                 logger.info(
@@ -320,7 +383,6 @@ class ResumeService:
                 len(new_block or ""),
                 (new_block or "")[:400],
             )
-            # Diagnostics: if the model echoed the block unchanged, log it.
             if new_block and new_block.strip() == block.strip():
                 logger.warning(
                     "ai_resume_section_unchanged job_id=%s section=%s "
@@ -372,9 +434,8 @@ class ResumeService:
                 str(job_id),
             )
 
-        ai_key = self._resume_key(user.id, "ai", "tex")
         latex_url = r2_storage.upload_text(
-            ai_key, optimized_latex, RESUME_TEX_CONTENT_TYPE
+            ai_tex_key, optimized_latex, RESUME_TEX_CONTENT_TYPE
         )
 
         # Compile the optimized LaTeX to PDF.
@@ -383,20 +444,20 @@ class ResumeService:
             optimized_latex, self.db
         )
         if pdf_bytes:
-            pdf_key = self._resume_key(user.id, "ai", "pdf")
             pdf_url = r2_storage.upload_bytes(
-                pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE
+                ai_pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE
             )
         else:
             logger.warning(
-                "ai_resume_pdf_compile_failed job_id=%s", str(job_id)
+                "ai_resume_pdf_compile_failed job_id=%s slot=%s",
+                str(job_id),
+                assigned_slot,
             )
 
-        user_repo = UserRepository(self.db)
-        await user_repo.update(
-            user,
-            ai_resume_latex_url=latex_url,
-            ai_resume_pdf_url=pdf_url,
+        await self.job_repo.update(
+            job,
+            optimized_resume_latex_url=latex_url,
+            optimized_resume_pdf_url=pdf_url,
         )
 
         download_url = (
@@ -421,13 +482,27 @@ class ResumeService:
         )
 
     async def get_download_url(
-        self, user: User, version: str
+        self,
+        user: User,
+        version: str,
+        job_id: Optional[uuid.UUID] = None,
     ) -> GetResumeDownloadResponse:
         """Return the presigned GET URL for the compiled PDF of a stored resume copy."""
-        if version == "ai":
-            pdf_url = user.ai_resume_pdf_url
-        else:
+        if version == "original":
             pdf_url = user.original_resume_pdf_url
+        elif version == "ai":
+            if job_id:
+                job = await self.job_repo.get_by_id(job_id)
+                if job is None:
+                    raise NotFoundError("Job", str(job_id))
+                self.assert_ownership(job, user.id, "resume")
+                pdf_url = job.optimized_resume_pdf_url
+            else:
+                raise BadRequestError(
+                    "job_id is required to fetch the AI resume PDF"
+                )
+        else:
+            raise BadRequestError(f"Unknown version: '{version}'")
 
         if not pdf_url:
             return GetResumeDownloadResponse(
@@ -484,7 +559,7 @@ def _validate_latex(content: str) -> bool:
 
       - Strip line comments (`% ...`) and verbatim environments first, since `%`
         and braces inside them are not real LaTeX structure.
-      - Treat `\{` and `\}` (escaped braces) as literal text, not grouping.
+      - Treat `\\{` and `\\}` (escaped braces) as literal text, not grouping.
       - Count `{` vs `}`; they must balance exactly, and depth must never go
         negative (a `}` with no matching `{`).
 
@@ -570,11 +645,20 @@ _SECTION_KEYWORDS = {
         "about",
         "objective",
     ],
-    "skills": ["skill", "technical", "competenc"],
+    "skills": [
+        "skill",
+        "technical",
+        "competenc",
+        "technologies",
+        "expertise",
+    ],
     "work_experience": [
         "experience",
         "work",
         "employment",
+        "work history",
+        "professional experience",
+        "work experience",
         "professional",
     ],
     "projects": ["project"],
@@ -590,18 +674,31 @@ _SECTION_KEYWORDS = {
 _SECTION_HEADING_RE = re.compile(r"\\section\*?\s*\{(.*?)\}", re.DOTALL)
 
 
+def _find_uncommented_headings(latex: str) -> list[re.Match]:
+    """Find all \\section{...} / \\section*{...} headings in LaTeX that are NOT
+    commented out by a preceding '%' on the same line.
+    """
+    matches = []
+    for m in _SECTION_HEADING_RE.finditer(latex):
+        line_start = latex.rfind("\n", 0, m.start())
+        line_start = 0 if line_start == -1 else line_start + 1
+        prefix = latex[line_start : m.start()]
+        prefix_clean = prefix.replace("\\%", "\x00")
+        if "%" in prefix_clean:
+            # Commented out by '%' on the same line — skip
+            continue
+        matches.append(m)
+    return matches
+
+
 def _parse_latex_sections(latex: str) -> dict[str, str]:
     """Step 1: deterministically split the LaTeX document into named section blocks.
 
     Returns a dict with keys for each known section whose \\section{...} heading
     is present, plus 'header' (everything before the first section, e.g. preamble
     + name/contact) and 'footer' (everything after the last known section).
-
-    NOTE: No fallback fabricates a 'professional_summary' from pre-heading content.
-    If the original resume has no Summary/Profile/About heading, the key is simply
-    absent — the caller must treat that as "section does not exist".
     """
-    headings = list(_SECTION_HEADING_RE.finditer(latex))
+    headings = _find_uncommented_headings(latex)
     result: dict[str, str] = {}
 
     # Locate each known section's [start, end) span.
@@ -628,10 +725,6 @@ def _parse_latex_sections(latex: str) -> dict[str, str]:
     for key, (start, end) in spans.items():
         result[key] = latex[start:end]
 
-    # ❌ REMOVED: the old fallback that fabricated 'professional_summary' from
-    #    the content between \begin{document} and the first heading.  That
-    #    content is just the name/contact header — not a summary section.
-
     # Footer = everything after the last known section span.
     last_end = max(
         (end for _, (_, end) in spans.items()),
@@ -650,18 +743,9 @@ def _reconstruct_latex(
 
     Walks the original document heading-by-heading and emits, for each section,
     the ORIGINAL heading followed by the optimized body (if that section was
-    optimized) or the original body.  This guarantees every section heading
-    appears exactly once and no section can be silently dropped, renamed, or
-    have its header eaten by an adjacent optimized section.  No LLM involved.
-
-    Safety rules:
-      - ALL \\section{...} headings are stripped from optimised blocks (the
-        original heading is re-emitted by this loop).
-      - If an optimised block is empty after stripping, the ORIGINAL body is
-        kept (prevents the LLM from accidentally deleting a section).
-      - A final pass verifies no NEW \\section headings leaked into the output.
+    optimized) or the original body.
     """
-    headings = list(_SECTION_HEADING_RE.finditer(original_latex))
+    headings = _find_uncommented_headings(original_latex)
     if not headings:
         # No headings -> nothing to splice; return original unchanged.
         logger.warning(

@@ -78,3 +78,14 @@ class JobRepository(BaseRepository[Job]):
             q = q.where(Job.status == status)
         result = await self.db.execute(q)
         return result.scalar_one()
+
+    async def list_jobs_with_ai_resumes(
+        self, user_id: str | uuid.UUID
+    ) -> List[Job]:
+        q = select(Job).where(
+            Job.user_id == user_id,
+            (Job.optimized_resume_pdf_url.isnot(None))
+            | (Job.optimized_resume_latex_url.isnot(None)),
+        )
+        result = await self.db.execute(q)
+        return list(result.scalars().all())
