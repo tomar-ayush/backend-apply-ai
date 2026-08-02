@@ -14,7 +14,9 @@ SUPPORTED_LLM_PROVIDERS = {
 }
 
 
-DEFAULT_LINKEDIN_MESSAGE = "I'm exploring opportunities and would love to connect"
+DEFAULT_LINKEDIN_MESSAGE = (
+    "I'm exploring opportunities and would love to connect"
+)
 
 
 class UserProfile(BaseModel):
@@ -41,9 +43,9 @@ class UserProfile(BaseModel):
     education: Optional[Dict[str, Any]] = None
     linkedin_message: str = DEFAULT_LINKEDIN_MESSAGE
 
-    # Resume
-    original_resume_pdf_url: Optional[str] = None
-    original_resume_latex_url: Optional[str] = None
+    # # Resume
+    # original_resume_pdf_url: Optional[str] = None
+    # original_resume_latex_url: Optional[str] = None
 
     # LLM config (keys never returned)
     llm_provider: Optional[str] = None
@@ -54,8 +56,8 @@ class UserProfile(BaseModel):
     has_gemini_key: bool = False
     has_claude_key: bool = False
 
-    created_at: datetime
-    updated_at: datetime
+    # created_at: datetime
+    # updated_at: datetime
 
     model_config = {"from_attributes": True}
 

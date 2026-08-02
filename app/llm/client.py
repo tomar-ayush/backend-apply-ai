@@ -99,11 +99,7 @@ class LLMClient:
         Base completion coordinator across all LLM providers.
         """
         try:
-            if self.provider in ("openai", "openrouter"):
-                if self.provider == "openrouter" and not model:
-                    raise BadRequestError(
-                        "OpenRouter requires an explicit model name (e.g. 'openai/gpt-4o-mini')."
-                    )
+            if self.provider == "openai":
                 return await self._openai_complete(
                     system,
                     user,
@@ -112,6 +108,19 @@ class LLMClient:
                     json_mode,
                     response_schema,
                 )
+
+            if self.provider == "openrouter":
+                model = model or "openrouter/free"
+
+                return await self._openai_complete(
+                    system,
+                    user,
+                    model,
+                    max_tokens,
+                    json_mode,
+                    response_schema,
+                )
+
             if self.provider == "anthropic":
                 return await self._anthropic_complete(
                     system, user, model, max_tokens, response_schema
@@ -153,12 +162,20 @@ class LLMClient:
         }
 
         if response_schema:
-            res = await self._client.beta.chat.completions.parse(
-                response_format=response_schema, **kwargs
-            )
-            return res.choices[0].message.content or ""
+            try:
+                res = await self._client.beta.chat.completions.parse(
+                    response_format=response_schema, **kwargs
+                )
+                return res.choices[0].message.content or ""
+            except Exception as e:
+                logger.info(
+                    "openai_parse_structured_output_fallback provider=%s model=%s error=%s",
+                    self.provider,
+                    model_name,
+                    str(e),
+                )
 
-        if json_mode:
+        if json_mode or response_schema:
             kwargs["response_format"] = {"type": "json_object"}
 
         response = await self._client.chat.completions.create(**kwargs)
@@ -181,10 +198,17 @@ class LLMClient:
         }
 
         if response_schema:
-            response = await self._client.beta.messages.parse(
-                response_format=response_schema, **kwargs
-            )
-            return response.text
+            try:
+                response = await self._client.beta.messages.parse(
+                    response_format=response_schema, **kwargs
+                )
+                return response.text
+            except Exception as e:
+                logger.info(
+                    "anthropic_parse_structured_output_fallback model=%s error=%s",
+                    model_name,
+                    str(e),
+                )
 
         response = await self._client.messages.create(**kwargs)
         return response.content[0].text
@@ -235,25 +259,32 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """
         Executes a completion and returns a parsed/validated dictionary.
-        Supports automatic retries for repair if JSON is truncated.
+        Supports automatic retries for repair if JSON is invalid or missing required fields.
         """
-        use_structured = (
-            self.provider != "openrouter"
-            and response_schema is not None
-        )
-        use_json_mode = self.provider != "openrouter"
+        system_prompt = system
+        if response_schema:
+            schema_json = json.dumps(
+                response_schema.model_json_schema(), indent=2
+            )
+            if "JSON Schema" not in system_prompt:
+                system_prompt = (
+                    f"{system}\n\n"
+                    f"IMPORTANT: You MUST respond ONLY with a single valid JSON object adhering strictly to this JSON Schema:\n"
+                    f"```json\n{schema_json}\n```\n"
+                    f"Do NOT include markdown formatting, explanations, or conversational text."
+                )
 
         raw = await self.complete(
-            system=system,
+            system=system_prompt,
             user=user,
             model=model,
             max_tokens=max_tokens,
-            json_mode=use_json_mode,
-            response_schema=response_schema if use_structured else None,
+            json_mode=True,
+            response_schema=response_schema,
         )
-        raw = raw.strip()
+        raw = (raw or "").strip()
 
-        # Clean markdown code fences if wrapped by the model
+        # Clean markdown code fences (e.g. ```json ... ``` or ``` ...)
         if raw.startswith("```"):
             lines = raw.splitlines()
             if lines and lines[0].startswith("```"):
@@ -261,6 +292,16 @@ class LLMClient:
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
             raw = "\n".join(lines).strip()
+
+        # Clean surrounding quotation marks if present
+        quote_chars = "\"'`“”"
+        while (
+            raw
+            and len(raw) >= 2
+            and raw[0] in quote_chars
+            and raw[-1] in quote_chars
+        ):
+            raw = raw[1:-1].strip()
 
         try:
             if response_schema:
@@ -286,14 +327,22 @@ class LLMClient:
                 max_retries,
                 str(e),
             )
+            repair_system = (
+                f"{system_prompt}\n\n"
+                f"CRITICAL: Your previous response failed schema validation or was invalid JSON. "
+                f"Error details: {str(e)}\n"
+                f"You MUST regenerate and return the COMPLETE, single valid JSON object matching all required fields."
+            )
             repair_user = (
-                "The previous response was cut off and is not valid JSON. "
-                "Continue and complete the SAME JSON object exactly where it stopped, "
-                "output ONLY the remaining JSON (no commentary, no markdown):\n\n"
-                + raw
+                f"{user}\n\n"
+                f"--- PREVIOUS FAILURE DETAILS ---\n"
+                f"Validation Error: {str(e)}\n"
+                f"Previous Response Preview: {raw[:300]}\n"
+                f"--- END PREVIOUS FAILURE DETAILS ---\n\n"
+                f"Please regenerate and output the COMPLETE, valid JSON object from start to finish."
             )
             return await self.complete_json(
-                system=system,
+                system=repair_system,
                 user=repair_user,
                 model=model,
                 response_schema=response_schema,

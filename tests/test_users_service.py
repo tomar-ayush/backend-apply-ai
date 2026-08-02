@@ -116,3 +116,25 @@ async def test_update_linkedin_message_rejects_empty():
 
     with pytest.raises(BadRequestError):
         await svc.update_linkedin_message(user, "   ")
+
+
+@pytest.mark.asyncio
+async def test_update_me_allows_setting_current_llm_model_to_none():
+    user = make_user(current_llm_model="gpt-4o")
+    db = AsyncMock()
+    req = UpdateUserRequest(llm_provider="gemini", current_llm_model=None)
+
+    with patch("app.users.service.UserRepository") as MockRepo:
+        mock_repo = AsyncMock()
+        mock_repo.update = AsyncMock(
+            return_value=make_user(llm_provider="gemini", current_llm_model=None)
+        )
+        MockRepo.return_value = mock_repo
+        svc = UserService(db=db)
+        profile = await svc.update_me(user, req)
+
+        assert mock_repo.update.called
+        call_kwargs = mock_repo.update.call_args[1]
+        assert "current_llm_model" in call_kwargs
+        assert call_kwargs["current_llm_model"] is None
+        assert profile.current_llm_model is None

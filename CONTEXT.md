@@ -58,6 +58,10 @@ To minimize Cloudflare R2 storage usage, AI resumes are NOT saved with random ke
 - `LLMClient._sanitize_schema_for_gemini` strips `"additionalProperties"`.
 - Free-form dictionaries like `Dict[str, List[str]]` collapse to `{}` in Gemini structured outputs.
 - **Solution**: Represent free-form dicts as lists of explicit objects (e.g. `List[TopicLearning]`) in Pydantic schemas, and convert to dictionary format in `JobJDService` before saving to DB.
+- **OpenRouter & Structured Output Fallbacks (`app/llm/client.py`)**:
+  - `complete_json()` injects the target `Pydantic` model's JSON Schema into system instructions and sets `json_mode=True` across all providers (including OpenRouter).
+  - If `beta.chat.completions.parse()` fails or is not supported by a specific OpenRouter model, `_openai_complete` gracefully falls back to `response_format={"type": "json_object"}`.
+  - On validation retries, `complete_json()` provides the exact error details and instructs the model to re-output the **FULL, COMPLETE JSON object from start to finish** (instead of requesting partial text continuations).
 
 ### XML-Style Resume Optimization Prompts (`app/llm/prompts.py`)
 All section prompts (`professional_summary`, `skills`, `work_experience`, `projects`, `education`) use XML tag rules (`<summary_optimization_rules>`, `<skills_optimization_rules>`, `<structural_preservation_rules>`, `<layout_and_length_constraints>`, `<linguistic_and_data_guardrails>`, `<output_delivery_constraint>`):

@@ -94,7 +94,7 @@ class UserService(BaseService):
         self, user: User, req: UpdateUserRequest
     ) -> UserProfile:
         updates = req.model_dump(
-            exclude_none=True, exclude={"llm_api_key"}
+            exclude_unset=True, exclude={"llm_api_key"}
         )
 
         if req.llm_api_key is not None:

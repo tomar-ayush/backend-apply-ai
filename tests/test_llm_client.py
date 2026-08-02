@@ -74,3 +74,24 @@ async def test_llm_client_complete_json_retry_exhausted_raises():
                     response_schema=SampleSchema,
                     max_retries=0,
                 )
+
+
+@pytest.mark.asyncio
+async def test_llm_client_openrouter_complete_json():
+    mock_client = MagicMock()
+    with patch("app.llm.client.LLMClient._build_client", return_value=mock_client):
+        client = LLMClient(provider="openrouter", api_key="sk-or-key")
+        with patch.object(
+            client, "complete", return_value='{"name": "openrouter", "count": 100}'
+        ) as mock_complete:
+            result = await client.complete_json(
+                system="sys",
+                user="usr",
+                model="openai/gpt-4o-mini",
+                response_schema=SampleSchema,
+            )
+            assert result == {"name": "openrouter", "count": 100}
+            assert mock_complete.called
+            call_kwargs = mock_complete.call_args[1]
+            assert call_kwargs["json_mode"] is True
+            assert "JSON Schema" in call_kwargs["system"]
