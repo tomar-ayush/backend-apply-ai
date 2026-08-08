@@ -15,7 +15,7 @@ from app.tasks.schemas import (
     WorkdayCallbackRequest,
     TriggerLinkedinRequest,
     TriggerLinkedinResponse,
-    LinkedinCallbackRequest,
+    CompleteLinkedinRequest,
 )
 from app.tasks.service import TaskService
 
@@ -77,21 +77,21 @@ async def trigger_linkedin(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    referral = await TaskService(db).trigger_linkedin(
+    task, referral = await TaskService(db).trigger_linkedin(
         referral_id, req, current_user
     )
-    return TriggerLinkedinResponse(queued=True, referral_id=referral.id)
+    return TriggerLinkedinResponse(queued=True, referral_id=referral.id, task_id=task.id)
 
 
-@router.post("/referrals/{referral_id}/callback")
-async def linkedin_callback(
+@router.post("/referrals/{referral_id}/complete")
+async def linkedin_complete(
     referral_id: uuid.UUID,
-    req: LinkedinCallbackRequest,
+    req: CompleteLinkedinRequest,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # No user auth — validated via signed callback token from the agent
-    return await TaskService(db).handle_linkedin_callback(
-        referral_id, req
+    return await TaskService(db).complete_linkedin(
+        referral_id, req, current_user
     )
 
 

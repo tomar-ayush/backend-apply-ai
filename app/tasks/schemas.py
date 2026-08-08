@@ -67,20 +67,17 @@ class TriggerLinkedinRequest(BaseModel):
 
     linkedin_url: str
     message: str
-    agent_url: (
-        str  # Cloudflare tunnel / local URL of the LinkedIn agent
-    )
-
-
+    task_id: Optional[uuid.UUID] = None
 class TriggerLinkedinResponse(BaseModel):
     queued: bool
     referral_id: uuid.UUID
+    task_id: Optional[uuid.UUID] = None
 
 
-class LinkedinCallbackRequest(BaseModel):
-    """Posted back by the LinkedIn agent once the connect attempt finishes."""
+class CompleteLinkedinRequest(BaseModel):
+    """Posted by the extension using Bearer Token authentication once the connection task finishes."""
 
-    state: stateEnum
+    state: str
     task_id: Optional[str] = None
     error: Optional[str] = None
-    token: str
+

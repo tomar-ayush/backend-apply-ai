@@ -23,7 +23,7 @@ from app.tasks.schemas import (
     TriggerWorkdayRequest,
     WorkdayCallbackRequest,
     TriggerLinkedinRequest,
-    LinkedinCallbackRequest,
+    CompleteLinkedinRequest,
 )
 from app.jobs.repository import JobRepository
 from app.users.models import User
@@ -257,19 +257,18 @@ class TaskService(BaseService):
         referral_id: uuid.UUID,
         req: TriggerLinkedinRequest,
         user: User,
-    ) -> Referral:
+    ) -> tuple[Task, Referral]:
         referral = await self.referral_repo.get_by_id(referral_id)
         if referral is None:
             raise NotFoundError("Referral", str(referral_id))
-
-        callback_token = create_callback_token(str(referral_id))
-        callback_url = f"{settings.API_BASE_URL.rstrip('/')}/tasks/referrals/{referral_id}/callback"
 
         normalized_linkedin_url = normalize_linkedin_url(
             req.linkedin_url
         )
 
+        task_id = req.task_id or uuid.uuid4()
         task = await self.repo.create(
+            id=task_id,
             job_id=referral.job_id,
             user_id=user.id,
             task_type=TaskType.LINKEDIN_CONNECT,
@@ -277,43 +276,13 @@ class TaskService(BaseService):
                 "referral_id": str(referral_id),
                 "linkedin_url": normalized_linkedin_url,
                 "referral_name": referral.name,
-                "callback_url": callback_url,
             },
-            status=TaskStatus.QUEUED,
+            status=TaskStatus.RUNNING,
         )
 
-        payload = {
-            "referral_id": str(referral_id),
-            "task_id": str(task.id),
-            "linkedin_url": normalized_linkedin_url,
-            "message": req.message,
-            "referral_name": referral.name,
-            "user_name": user.full_name,
-            "callback_url": callback_url,
-            "callback_token": callback_token,
-        }
-
-        agent_url = req.agent_url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{agent_url}/run-task", json=payload
-                )
-                resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ExternalServiceError(
-                "Agent", f"Agent returned HTTP {e.response.status_code}"
-            )
-        except httpx.RequestError as e:
-            raise ExternalServiceError(
-                "Agent", f"Could not reach agent at {agent_url}: {e}"
-            )
-
-        task = await self.repo.update(task, status=TaskStatus.RUNNING)
         logger.info(
-            "linkedin_agent_task_running referral_id=%s agent_url=%s task_id=%s",
+            "linkedin_extension_task_queued referral_id=%s task_id=%s",
             str(referral_id),
-            agent_url,
             str(task.id),
         )
 
@@ -326,53 +295,46 @@ class TaskService(BaseService):
                 "referral_id": str(referral_id),
             },
         )
-        return referral
+        return task, referral
 
-    async def handle_linkedin_callback(
-        self, referral_id: uuid.UUID, req: LinkedinCallbackRequest
+    async def complete_linkedin(
+        self, referral_id: uuid.UUID, req: CompleteLinkedinRequest, user: User
     ) -> dict:
-        token_referral_id = verify_callback_token(req.token)
-        if token_referral_id != str(referral_id):
-            raise ForbiddenError(
-                "Callback token does not match referral"
-            )
-
         referral = await self.referral_repo.get_by_id(referral_id)
         if referral is None:
             raise NotFoundError("Referral", str(referral_id))
 
-        task = await self.repo.get_by_id(req.task_id)
-        if task is None:
-            raise NotFoundError("Task", str(req.task_id))
+        if req.task_id:
+            try:
+                task_uuid = uuid.UUID(req.task_id)
+                task = await self.repo.get_by_id(task_uuid)
+                if task:
+                    new_status = TaskStatus.COMPLETED if req.state in ["completed", "already_connected", "already_pending"] else TaskStatus.FAILED
+                    await self.repo.update(task, status=new_status)
+            except ValueError:
+                pass
 
-        if req.state == "completed":
-            await self.repo.update(task, status=TaskStatus.COMPLETED)
-
-            await self.referral_repo.update(
-                referral,
-                status=ReferralStatus.REQUESTED,
-                asked_at=datetime.now(timezone.utc),
-            )
-            logger.info(
-                "linkedin_agent_callback_completed referral_id=%s",
-                str(referral_id),
-            )
+        if req.state in ["completed", "already_connected", "already_pending"]:
+            if referral.status == ReferralStatus.NOT_CONTACTED:
+                await self.referral_repo.update(
+                    referral,
+                    status=ReferralStatus.REQUESTED,
+                    asked_at=datetime.now(timezone.utc),
+                )
+            logger.info("linkedin_extension_completed referral_id=%s", str(referral_id))
         else:
-            logger.warning(
-                "linkedin_agent_callback_failed referral_id=%s error=%s",
-                str(referral_id),
-                req.error,
-            )
+            logger.warning("linkedin_extension_failed referral_id=%s error=%s", str(referral_id), req.error)
 
         await event_bus.publish(
-            f"user:{task.user_id}",
+            f"user:{user.id}",
             {
                 "type": "task_completed",
-                "task_id": str(req.task_id),
+                "task_id": req.task_id,
                 "task_type": TaskType.LINKEDIN_CONNECT.value,
                 "referral_id": str(referral_id),
-                "state": req.state.value,
+                "state": req.state,
                 "error": req.error,
             },
         )
-        return {"success": True, "state": req.state.value}
+        return {"success": True, "state": req.state}
+
