@@ -96,51 +96,85 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> str:
         """
-        Base completion coordinator across all LLM providers.
+        Base completion coordinator across all LLM providers with automatic model fallback.
         """
-        try:
-            if self.provider == "openai":
-                return await self._openai_complete(
-                    system,
-                    user,
-                    model,
-                    max_tokens,
-                    json_mode,
-                    response_schema,
-                )
+        import asyncio
 
-            if self.provider == "openrouter":
-                model = model or "openrouter/free"
+        fallback_models = {
+            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+            "anthropic": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+            "gemini": ["gemini-3.6-flash", "gemini-3.1-pro", "gemini-3.5-pro"],
+            "openrouter": ["openai/gpt-4o", "openai/gpt-4o-mini"]
+        }
+        
+        provider_key = self.provider or "openai"
+        default_models = fallback_models.get(provider_key, [])
+        
+        models_to_try = [model] if model else (
+            [default_models[0]] if default_models else []
+        )
+        
+        # Add fallback models if they aren't already in the try list
+        for fb_model in default_models:
+            if fb_model not in models_to_try:
+                models_to_try.append(fb_model)
 
-                return await self._openai_complete(
-                    system,
-                    user,
-                    model,
-                    max_tokens,
-                    json_mode,
-                    response_schema,
+        last_error = None
+        
+        for attempt_model in models_to_try:
+            try:
+                if self.provider == "openai":
+                    return await self._openai_complete(
+                        system,
+                        user,
+                        attempt_model,
+                        max_tokens,
+                        json_mode,
+                        response_schema,
+                    )
+                if self.provider == "openrouter":
+                    return await self._openai_complete(
+                        system,
+                        user,
+                        attempt_model or "openrouter/free",
+                        max_tokens,
+                        json_mode,
+                        response_schema,
+                    )
+                if self.provider == "anthropic":
+                    return await self._anthropic_complete(
+                        system, user, attempt_model, max_tokens, response_schema
+                    )
+                if self.provider == "gemini":
+                    return await self._gemini_complete(
+                        system,
+                        user,
+                        attempt_model,
+                        max_tokens,
+                        json_mode,
+                        response_schema,
+                    )
+            except (ExternalServiceError, BadRequestError) as e:
+                # If it's a structural/auth error, fallback might not help, but for 
+                # generic API errors (503, 429), falling back is good.
+                logger.warning(
+                    "llm_model_fallback provider=%s failed_model=%s error=%s", 
+                    self.provider, attempt_model, str(e)
                 )
+                last_error = e
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.warning(
+                    "llm_model_fallback provider=%s failed_model=%s error=%s", 
+                    self.provider, attempt_model, str(e)
+                )
+                last_error = e
+                await asyncio.sleep(1)
 
-            if self.provider == "anthropic":
-                return await self._anthropic_complete(
-                    system, user, model, max_tokens, response_schema
-                )
-            if self.provider == "gemini":
-                return await self._gemini_complete(
-                    system,
-                    user,
-                    model,
-                    max_tokens,
-                    json_mode,
-                    response_schema,
-                )
-        except (ExternalServiceError, BadRequestError):
-            raise
-        except Exception as e:
-            logger.error(
-                "llm_error provider=%s error=%s", self.provider, str(e)
-            )
-            raise ExternalServiceError("LLM", str(e))
+        logger.error(
+            "llm_error_all_models_failed provider=%s error=%s", self.provider, str(last_error)
+        )
+        raise ExternalServiceError("LLM", str(last_error))
 
     async def _openai_complete(
         self,

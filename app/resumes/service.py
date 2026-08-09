@@ -70,19 +70,28 @@ def _clean_llm_latex_output(text: Optional[str]) -> str:
 
     # Strip markdown code blocks (```latex ... ``` or ``` ...)
     if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:latex|tex)?\n?", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"^```(?:latex|tex)?\n?", "", cleaned, flags=re.IGNORECASE
+        )
     if cleaned.endswith("```"):
         cleaned = re.sub(r"\n?```$", "", cleaned)
     cleaned = cleaned.strip()
 
     # Strip any internal/residual markdown code fences
     if "```" in cleaned:
-        cleaned = re.sub(r"```(?:latex|tex)?", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"```(?:latex|tex)?", "", cleaned, flags=re.IGNORECASE
+        )
         cleaned = cleaned.replace("```", "").strip()
 
     # Strip surrounding quotes or backticks (e.g., “...”, "...", '...', ``...'' or `...`)
-    quote_chars = '"\'`“”‘’'
-    while cleaned and len(cleaned) >= 2 and cleaned[0] in quote_chars and cleaned[-1] in quote_chars:
+    quote_chars = "\"'`“”‘’"
+    while (
+        cleaned
+        and len(cleaned) >= 2
+        and cleaned[0] in quote_chars
+        and cleaned[-1] in quote_chars
+    ):
         cleaned = cleaned[1:-1].strip()
 
     # Strip opening preambles like "Here is the updated LaTeX snippet:"
