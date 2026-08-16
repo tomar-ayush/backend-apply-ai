@@ -41,6 +41,7 @@ class JobService(BaseService):
         await self.db.flush()
 
         jd_svc = JobJDService(self.db)
+        jd = None
         try:
             jd, _ = await jd_svc.parse_and_store(
                 job.id, req.workday_url, user, ai=req.ai
@@ -48,20 +49,23 @@ class JobService(BaseService):
             if not req.applied:
                 job.status = JobStatus.JD_PARSED
             await self.db.flush()
-            logger.info(
-                "job_created job_id=%s user_id=%s",
-                str(job.id),
-                str(user.id),
-            )
-            await self.db.refresh(job)
-            return JobDetailResponse.from_job(job, jd)
         except Exception:
             logger.warning(
-                "job_create_jd_parse_failed job_id=%s user_id=%s",
+                "job_create_jd_parse_failed job_id=%s user_id=%s — "
+                "job saved without JD data",
                 str(job.id),
                 str(user.id),
+                exc_info=True,
             )
-            raise
+
+        logger.info(
+            "job_created job_id=%s user_id=%s status=%s",
+            str(job.id),
+            str(user.id),
+            job.status,
+        )
+        await self.db.refresh(job)
+        return JobDetailResponse.from_job(job, jd)
 
     async def list(
         self, user: User, status: Optional[JobStatus] = None
