@@ -31,10 +31,11 @@ class JobService(BaseService):
     async def create(
         self, req: CreateJobRequest, user: User
     ) -> JobDetailResponse:
+        initial_status = JobStatus.APPLIED if req.applied else JobStatus.NEW
         job = Job(
             user_id=user.id,
             workday_url=req.workday_url,
-            status=JobStatus.NEW,
+            status=initial_status,
         )
         self.db.add(job)
         await self.db.flush()
@@ -44,7 +45,8 @@ class JobService(BaseService):
             jd, _ = await jd_svc.parse_and_store(
                 job.id, req.workday_url, user, ai=req.ai
             )
-            job.status = JobStatus.JD_PARSED
+            if not req.applied:
+                job.status = JobStatus.JD_PARSED
             await self.db.flush()
             logger.info(
                 "job_created job_id=%s user_id=%s",

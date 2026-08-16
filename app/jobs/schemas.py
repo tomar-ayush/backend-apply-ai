@@ -11,6 +11,7 @@ from app.common.validators import is_http_url
 class CreateJobRequest(BaseModel):
     workday_url: str
     ai: bool = True
+    applied: bool = False
 
     @field_validator("workday_url")
     @classmethod
