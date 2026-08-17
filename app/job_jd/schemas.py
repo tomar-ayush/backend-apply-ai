@@ -17,6 +17,7 @@ class JobJDResponse(BaseModel):
     extracted_department: Optional[List[str]] = None
     llm_summary: Optional[str] = None
     learning: Optional[Dict[str, List[str]]] = None
+    missing_keywords: Optional[List[str]] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

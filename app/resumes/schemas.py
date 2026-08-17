@@ -1,6 +1,40 @@
+import uuid
+from datetime import datetime
 from typing import Optional, Literal, List
 
 from pydantic import BaseModel
+
+class PreviewRequest(BaseModel):
+    sections: List["RESUME_SECTIONS"]
+    extra_keywords: Optional[List[str]] = None
+
+class BulletChange(BaseModel):
+    change_id: str
+    section: str
+    original_text: str
+    optimized_text: str
+    change_type: Literal["modified", "added", "removed", "unchanged"]
+
+class SectionDiff(BaseModel):
+    section_key: str
+    section_title: str
+    changes: List[BulletChange]
+    
+class PreviewResponse(BaseModel):
+    preview_id: uuid.UUID
+    sections: List[SectionDiff]
+    expires_at: datetime
+
+class FinalizeRequest(BaseModel):
+    preview_id: uuid.UUID
+    accepted_change_ids: List[str]
+
+class FinalizeResponse(BaseModel):
+    download_url: Optional[str]
+    validated: bool
+    accepted_count: int
+    rejected_count: int
+
 
 
 RESUME_SECTIONS = Literal[

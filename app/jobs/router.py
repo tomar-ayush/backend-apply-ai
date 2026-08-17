@@ -79,6 +79,31 @@ async def update_job_status(
 # --- JD routes ---
 
 
+def _add_missing_keywords(jd, user: User) -> JobJDResponse:
+    resp = JobJDResponse.model_validate(jd)
+    
+    jd_kws = []
+    if isinstance(jd.keywords, list):
+        jd_kws.extend(jd.keywords)
+    if isinstance(jd.skills, dict):
+        if isinstance(jd.skills.get("required"), list):
+            jd_kws.extend(jd.skills["required"])
+        if isinstance(jd.skills.get("preferred"), list):
+            jd_kws.extend(jd.skills["preferred"])
+            
+    seen = set()
+    unique_jd_kws = []
+    for k in jd_kws:
+        if k.lower() not in seen:
+            seen.add(k.lower())
+            unique_jd_kws.append(k)
+            
+    user_kws = set(k.lower() for k in user.resume_keywords) if user.resume_keywords and isinstance(user.resume_keywords, list) else set()
+    resp.missing_keywords = [k for k in unique_jd_kws if k.lower() not in user_kws]
+    
+    return resp
+
+
 @router.get("/{job_id}/jd", response_model=JobJDResponse)
 async def get_jd(
     job_id: uuid.UUID,
@@ -86,7 +111,8 @@ async def get_jd(
     db: AsyncSession = Depends(get_db),
 ):
     await JobService(db).get(job_id, current_user)
-    return await JobJDService(db).get_by_job_id(job_id)
+    jd = await JobJDService(db).get_by_job_id(job_id)
+    return _add_missing_keywords(jd, current_user)
 
 
 @router.post("/{job_id}/parse", response_model=JobJDResponse)
@@ -100,7 +126,7 @@ async def reparse_jd(
     jd, _ = await jd_svc.parse_and_store(
         job.id, job.workday_url, current_user
     )
-    return jd
+    return _add_missing_keywords(jd, current_user)
 
 
 @router.patch("/{job_id}/jd", response_model=JobJDResponse)
@@ -112,7 +138,8 @@ async def update_jd(
 ):
     """Partially update the JD."""
     await JobService(db).get(job_id, current_user)
-    return await JobJDService(db).update(job_id, req)
+    jd = await JobJDService(db).update(job_id, req)
+    return _add_missing_keywords(jd, current_user)
 
 
 # --- Referral routes ---

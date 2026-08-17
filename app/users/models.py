@@ -61,6 +61,9 @@ class User(Base):
     ai_resume_latex_url: Mapped[Optional[str]] = mapped_column(Text)
     original_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
     ai_resume_pdf_url: Mapped[Optional[str]] = mapped_column(Text)
+    
+    # Auto-extracted keywords from original resume
+    resume_keywords: Mapped[Optional[list[str]]] = mapped_column(JSON)
 
     # LLM configuration (per-provider encrypted API keys)
     llm_provider: Mapped[Optional[str]] = mapped_column(String(50))

@@ -1,26 +1,44 @@
-# Handoff
+# Project Handoff: Keyword Optimization & Approve/Reject Workflow
 
-## Current Goal
-The main objective is to fix bugs, optimize, and remove antipatterns from the FastAPI backend handling JD parsing, resume optimization, and LaTeX compilation, ensuring that AI optimization steps do not drop content, hallucinate, or cause compilation crashes.
+## Goal
+Implement a robust keyword-driven resume optimization workflow featuring a two-phase approve/reject process for granular AI changes.
 
 ## Completed Tasks
-- **Discovered and Mapped Architecture**: Mapped out the actual resume optimization pipeline (LaTeX parsing -> Section-based LLM optimization -> Deterministic LaTeX reconstruction) instead of earlier assumptions.
-- **Analyzed Codebase & Addressed Antipatterns**: Created a detailed `analysis.md` report.
-- **Fixed `_parse_latex_sections` & `_reconstruct_latex` (resumes/service.py)**: Fixed a major bug where unrecognized sections (e.g. Certifications) were getting accidentally appended to the LLM context of the preceding section and swallowed during reconstruction. Now section boundaries are strictly bounded by `\section` declarations.
-- **Added `education` Section Support**: Added to `RESUME_SECTIONS` in schemas and handled correctly in keyword mapping.
-- **Cleaned up LLM Prompts (llm/prompts.py)**: Replaced overly strict character counting rules ("115-CHARACTER BOUNDARY LAW") with layout footprint instructions, fixed contradictory skills instructions, and removed dead assembling prompts.
-- **Fixed User Service Tests**: Added safe decryption handling in `app/users/service.py` to allow `pytest` to pass cleanly.
-- **Enhanced LaTeX Validation**: Upgraded `_validate_latex` to not only check for unbalanced braces (`{` / `}`) but also correctly validate balanced LaTeX environments (`\begin` / `\end`). This intercepts LLM hallucinations (like missing `\end{itemize}`) before it crashes the actual PDF generation API with a `422`.
+1. **Keyword Extraction (Phase 0)**
+   - Added `resume_keywords` JSON column to the `Users` table via Alembic migration.
+   - Implemented `_extract_keywords_from_resume` in `ResumeService` combining NLP fallbacks (from `user.skills` and regex) with an LLM prompt.
+   - Automatically triggered during original resume upload (`POST /resumes/finalize/original`).
 
-## Open Blockers
-- None at this time. The backend tests pass cleanly (`50 passed`), and the compilation pipeline is more resilient to LLM output truncation.
+2. **JD Keyword Matching (Phase 1)**
+   - Updated `JobJDResponse` schema to include `missing_keywords`.
+   - Updated `app/jobs/router.py` endpoints (`get_jd`, `reparse_jd`, `update_jd`) to dynamically compute `missing_keywords` by subtracting `user.resume_keywords` from JD required/preferred skills.
 
-## File Paths of Interest
-- `app/resumes/service.py`: Contains LaTeX parsing, validation, and reconstruction logic.
-- `app/llm/prompts.py`: Contains the system and user prompts for JD and resume optimization.
-- `app/job_jd/service.py`: Job Description fetching and LLM extraction logic.
-- `app/users/service.py`: User profile fetching and API key decryption.
+3. **Two-Phase Generation (Phase 2)**
+   - Created `ResumePreview` model and applied database migrations to store temporary AI diffs.
+   - Updated `app/llm/prompts.py` to accept `{extra_keywords}` for all section rewrites.
+   - Implemented `POST /resumes/preview/{job_id}`:
+     - Prompts the LLM with the specified missing keywords.
+     - Parses the LLM output and generates bullet-by-bullet diffs against the original LaTeX section using `_extract_bullet_diffs`.
+     - Returns a structured diff for the frontend to render an approve/reject UI.
+   - Implemented `POST /resumes/finalize-ai/{job_id}`:
+     - Accepts `preview_id` and a list of `accepted_change_ids`.
+     - Splices together the accepted AI changes and rejected original text.
+     - Compiles the final LaTeX into a PDF and assigns a storage slot exactly like the old workflow.
 
-## Exact Next Steps
-- Verify end-to-end functionality of JD parsing and Resume Optimization using a live test payload or frontend interface.
-- Keep an eye on any `latex_validation_error` logs to see if the LLM is consistently struggling with specific LaTeX environment structures. If so, prompt engineering in `app/llm/prompts.py` might need further constraints on preserving structures.
+## Open Blockers / Known Limitations
+- **Headless Summaries**: If a candidate's original LaTeX resume places their professional summary directly in the document preamble (without a dedicated `\section{Summary}` heading), the parsing logic will treat it as part of the `header` and skip optimizing it. This requires a more complex AST-based LaTeX parser to fully resolve, but the current approve/reject system mitigates the risk of catastrophic hallucination when integrating changes.
+- **Frontend Integration**: The frontend must now be updated to hit the new `/preview` and `/finalize-ai` routes and render the diff UI.
+
+## File Paths Modified
+- `app/users/models.py`
+- `app/resumes/models.py`
+- `app/job_jd/schemas.py`
+- `app/jobs/router.py`
+- `app/llm/prompts.py`
+- `app/resumes/schemas.py`
+- `app/resumes/router.py`
+- `app/resumes/service.py`
+
+## Next Steps
+1. The frontend team needs to build the diff-viewer UI utilizing the `PreviewResponse` format.
+2. Test the keyword extraction accuracy during new resume uploads and tune the extraction LLM prompt if necessary.

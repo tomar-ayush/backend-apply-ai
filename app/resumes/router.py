@@ -14,6 +14,10 @@ from app.resumes.schemas import (
     GenerateAiResumeResponse,
     GetResumeDownloadResponse,
     CompileResumeRequest,
+    PreviewRequest,
+    PreviewResponse,
+    FinalizeRequest,
+    FinalizeResponse,
 )
 
 router = APIRouter()
@@ -53,6 +57,40 @@ async def generate_ai_resume(
     """
     return await ResumeService(db).generate_ai(
         job_id, payload.sections, current_user
+    )
+
+
+@router.post(
+    "/preview/{job_id}",
+    response_model=PreviewResponse,
+    status_code=201,
+)
+async def generate_resume_preview(
+    job_id: uuid.UUID,
+    payload: PreviewRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a preview of AI changes for a resume, returning diffs to accept/reject."""
+    return await ResumeService(db).generate_preview(
+        job_id, payload, current_user
+    )
+
+
+@router.post(
+    "/finalize-ai/{job_id}",
+    response_model=FinalizeResponse,
+    status_code=201,
+)
+async def finalize_ai_preview(
+    job_id: uuid.UUID,
+    payload: FinalizeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Finalize the preview changes, compiling a new PDF based only on accepted edits."""
+    return await ResumeService(db).finalize_preview(
+        job_id, payload, current_user
     )
 
 

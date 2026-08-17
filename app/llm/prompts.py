@@ -88,9 +88,11 @@ SKILLS_SECTION_USER = r"""
 
 <execution_instructions>
 1. Re-prioritize and refine <current_skills_latex> to highlight skills required in <target_job_description>.
-2. Preserve exact LaTeX layout structure and category formatting.
-3. Escape all LaTeX special characters (% as \%, & as \&, etc.).
-4. Output ONLY raw LaTeX. Do NOT include markdown fences (```latex) or surrounding quotation marks.
+2. ADDITIONAL KEYWORDS TO INCORPORATE: {extra_keywords}
+   These are keywords the candidate has confirmed they are familiar with. Naturally weave these into the section where relevant.
+3. Preserve exact LaTeX layout structure and category formatting.
+4. Escape all LaTeX special characters (% as \%, & as \&, etc.).
+5. Output ONLY raw LaTeX. Do NOT include markdown fences (```latex) or surrounding quotation marks.
 </execution_instructions>
 """
 
@@ -130,9 +132,11 @@ PROFESSIONAL_SUMMARY_SECTION_USER = r"""
 
 <execution_instructions>
 1. Rewrite the professional summary to align with the core themes and keywords of <target_job_description>.
-2. Keep the summary between 2 and 3 sentences, matching the original layout footprint.
-3. Escape all LaTeX special characters (% as \%, & as \&, etc.).
-4. Output ONLY raw LaTeX. Do NOT include markdown fences (```latex) or surrounding quotation marks.
+2. ADDITIONAL KEYWORDS TO INCORPORATE: {extra_keywords}
+   These are keywords the candidate has confirmed they are familiar with. Naturally weave these into the section where relevant.
+3. Keep the summary between 2 and 3 sentences, matching the original layout footprint.
+4. Escape all LaTeX special characters (% as \%, & as \&, etc.).
+5. Output ONLY raw LaTeX. Do NOT include markdown fences (```latex) or surrounding quotation marks.
 </execution_instructions>
 """
 
@@ -173,9 +177,11 @@ WORK_EXPERIENCE_SECTION_USER = r"""
 
 <execution_instructions>
 1. Align bullet points in <current_experience_latex> with technical keywords from <target_job_description>.
-2. Preserve all company names, titles, dates, metrics, and LaTeX commands.
-3. Crucially, escape all percentage markers as \% and ampersands as \&.
-4. Keep the length and bullet count identical to original. Output ONLY raw LaTeX.
+2. ADDITIONAL KEYWORDS TO INCORPORATE: {extra_keywords}
+   These are keywords the candidate has confirmed they are familiar with. Naturally weave these into the section where relevant.
+3. Preserve all company names, titles, dates, metrics, and LaTeX commands.
+4. Crucially, escape all percentage markers as \% and ampersands as \&.
+5. Keep the length and bullet count identical to original. Output ONLY raw LaTeX.
 </execution_instructions>
 """
 
@@ -215,9 +221,11 @@ USER_PROJECT_SECTION_USER = r"""
 
 <execution_instructions>
 1. Reframe project bullet points in <current_projects_latex> to highlight relevance to <target_job_description>.
-2. Keep structural headings, project titles, URLs, and dates UNCHANGED.
-3. Escape all LaTeX special characters (% as \%, & as \&, etc.).
-4. Output ONLY raw LaTeX.
+2. ADDITIONAL KEYWORDS TO INCORPORATE: {extra_keywords}
+   These are keywords the candidate has confirmed they are familiar with. Naturally weave these into the section where relevant.
+3. Keep structural headings, project titles, URLs, and dates UNCHANGED.
+4. Escape all LaTeX special characters (% as \%, & as \&, etc.).
+5. Output ONLY raw LaTeX.
 </execution_instructions>
 """
 
@@ -257,8 +265,17 @@ EDUCATION_SECTION_USER = r"""
 
 <execution_instructions>
 1. Optimize description and coursework text in <current_education_latex> to highlight relevance to <target_job_description>.
-2. Preserve all school names, degrees, dates, and LaTeX commands UNCHANGED.
-3. Escape all LaTeX special characters (% as \%, & as \&, etc.).
-4. Output ONLY raw LaTeX.
+2. ADDITIONAL KEYWORDS TO INCORPORATE: {extra_keywords}
+   These are keywords the candidate has confirmed they are familiar with. Naturally weave these into the section where relevant.
+3. Preserve all school names, degrees, dates, and LaTeX commands UNCHANGED.
+4. Escape all LaTeX special characters (% as \%, & as \&, etc.).
+5. Output ONLY raw LaTeX.
 </execution_instructions>
+"""
+
+RESUME_KEYWORD_EXTRACTION_SYSTEM = r"""
+You are an expert technical recruiter and resume parser.
+Extract all technical skills, tools, frameworks, programming languages, cloud services, methodologies, and technical domain keywords from the provided resume text.
+Return ONLY a flat JSON array of strings (e.g. ["Python", "React", "AWS", "Agile"]).
+Do not include soft skills or generic terms.
 """

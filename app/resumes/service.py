@@ -36,6 +36,12 @@ from app.resumes.schemas import (
     CreateResumeUploadUrlsResponse,
     GenerateAiResumeResponse,
     GetResumeDownloadResponse,
+    PreviewRequest,
+    PreviewResponse,
+    SectionDiff,
+    BulletChange,
+    FinalizeRequest,
+    FinalizeResponse,
 )
 from app.common.service import BaseService
 from app.common.exceptions import (
@@ -61,6 +67,64 @@ def _slot_name_from_url(url: Optional[str]) -> Optional[str]:
             return s
     return None
 
+
+def _extract_bullet_diffs(section_key: str, original: str, optimized: str) -> list[dict]:
+    import uuid
+    import re
+    
+    if section_key not in ("work_experience", "projects"):
+        return [{
+            "change_id": str(uuid.uuid4()),
+            "section": section_key,
+            "original_text": original,
+            "optimized_text": optimized,
+            "change_type": "modified" if original.strip() != optimized.strip() else "unchanged"
+        }]
+
+    parts_orig = re.split(r'(\\resumeItem\{|\\item\s)', original)
+    parts_opt = re.split(r'(\\resumeItem\{|\\item\s)', optimized)
+    
+    if len(parts_orig) > 1 and len(parts_orig) == len(parts_opt):
+        preamble_orig = parts_orig[0]
+        preamble_opt = parts_opt[0]
+        
+        res = []
+        if preamble_orig.strip() or preamble_opt.strip():
+            res.append({
+                "change_id": str(uuid.uuid4()),
+                "section": f"{section_key}_preamble",
+                "original_text": preamble_orig,
+                "optimized_text": preamble_opt,
+                "change_type": "modified" if preamble_orig != preamble_opt else "unchanged"
+            })
+            
+        for i in range(1, len(parts_orig), 2):
+            delim_orig = parts_orig[i]
+            content_orig = parts_orig[i+1]
+            delim_opt = parts_opt[i]
+            content_opt = parts_opt[i+1]
+            
+            full_orig = delim_orig + content_orig
+            full_opt = delim_opt + content_opt
+            
+            res.append({
+                "change_id": str(uuid.uuid4()),
+                "section": section_key,
+                "original_text": full_orig,
+                "optimized_text": full_opt,
+                "change_type": "modified" if full_orig != full_opt else "unchanged"
+            })
+            
+        return res
+        
+    # Fallback
+    return [{
+        "change_id": str(uuid.uuid4()),
+        "section": section_key,
+        "original_text": original,
+        "optimized_text": optimized,
+        "change_type": "modified" if original.strip() != optimized.strip() else "unchanged"
+    }]
 
 def _clean_llm_latex_output(text: Optional[str]) -> str:
     """Sanitize raw LLM completion string by stripping markdown code blocks, quotes, and preambles."""
@@ -154,6 +218,55 @@ class ResumeService(BaseService):
             latex_presigned_url=presigned_url
         )
 
+    async def _extract_keywords_from_resume(self, latex_text: str, user: User) -> list[str]:
+        # 1. Fallback NLP extraction based on user.skills if any exist
+        nlp_keywords = set()
+        if user.skills and isinstance(user.skills, dict):
+            for cat, items in user.skills.items():
+                if isinstance(items, list):
+                    for item in items:
+                        nlp_keywords.add(str(item).strip())
+        
+        # 2. Add some basic standard tech words from latex just in case
+        common_tech = ["Python", "Java", "C++", "C#", "JavaScript", "TypeScript", "React", "Angular", "Vue", "Node.js", "AWS", "Azure", "GCP", "SQL", "NoSQL", "Docker", "Kubernetes", "Linux", "Git"]
+        for tech in common_tech:
+            if re.search(r'\b' + re.escape(tech) + r'\b', latex_text, re.IGNORECASE):
+                nlp_keywords.add(tech)
+
+        user_svc = UserService(None)
+        llm_key = user_svc.get_decrypted_llm_key(user)
+        if not llm_key or not user.llm_provider:
+            return list(nlp_keywords)
+
+        # 3. Primary LLM extraction
+        try:
+            from app.llm.prompts import RESUME_KEYWORD_EXTRACTION_SYSTEM
+            llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
+            prompt = f"Resume LaTeX:\n{latex_text[:10000]}"
+            
+            from pydantic import BaseModel
+            class KeywordsSchema(BaseModel):
+                keywords: list[str]
+
+            parsed = await llm.complete_json(
+                system=RESUME_KEYWORD_EXTRACTION_SYSTEM,
+                user=prompt,
+                model=user.current_llm_model,
+                response_schema=KeywordsSchema,
+                max_tokens=2048,
+            )
+            llm_keywords = parsed.get("keywords", [])
+            
+            # Merge with NLP keywords to be safe
+            combined = set(nlp_keywords)
+            for k in llm_keywords:
+                combined.add(k.strip())
+                
+            return list(combined)
+        except Exception as e:
+            logger.warning("llm_keyword_extraction_failed user_id=%s error=%s", str(user.id), str(e))
+            return list(nlp_keywords)
+
     async def finalize_resume(
         self, resume_type: str, user: User
     ) -> GetResumeDownloadResponse:
@@ -167,9 +280,15 @@ class ResumeService(BaseService):
         latex_text = r2_storage.download_text(latex_key)
 
         pdf_url = None
-        pdf_bytes = await _compile_latex_to_pdf_via_api(
-            latex_text, self.db
-        )
+        
+        # Run PDF compilation and keyword extraction concurrently
+        compile_task = asyncio.create_task(_compile_latex_to_pdf_via_api(latex_text, self.db))
+        extract_task = None
+        if kind == "original":
+            extract_task = asyncio.create_task(self._extract_keywords_from_resume(latex_text, user))
+
+        pdf_bytes = await compile_task
+        
         if pdf_bytes:
             pdf_key = self._resume_key(user.id, kind, "pdf")
             pdf_url = r2_storage.upload_bytes(
@@ -182,8 +301,18 @@ class ResumeService(BaseService):
                 str(user.id),
             )
 
+        keywords = None
+        if extract_task:
+            try:
+                keywords = await extract_task
+            except Exception as e:
+                logger.warning("resume_keyword_extraction_failed user_id=%s error=%s", str(user.id), str(e))
+
         user_repo = UserRepository(self.db)
-        await user_repo.update(user, original_resume_pdf_url=pdf_url)
+        if keywords is not None:
+            await user_repo.update(user, original_resume_pdf_url=pdf_url, resume_keywords=keywords)
+        else:
+            await user_repo.update(user, original_resume_pdf_url=pdf_url)
 
         download_url = (
             r2_storage.generate_presigned_get_url(
@@ -203,6 +332,198 @@ class ResumeService(BaseService):
                 if pdf_url
                 else f"{kind} LaTeX uploaded but PDF compilation failed"
             ),
+        )
+
+    async def generate_preview(
+        self, job_id: uuid.UUID, payload: PreviewRequest, user: User
+    ) -> PreviewResponse:
+        user_svc = UserService(None)
+        llm_key = user_svc.get_decrypted_llm_key(user)
+        if not llm_key or not user.llm_provider:
+            raise BadRequestError("LLM provider and API key must be configured")
+
+        job = await self.job_repo.get_by_id(job_id)
+        if job is None:
+            raise NotFoundError("Job", str(job_id))
+        self.assert_ownership(job, user.id, "job")
+
+        if not user.original_resume_latex_url:
+            raise BadRequestError("Original LaTeX resume must be uploaded")
+
+        jd = await self.jd_repo.get_by_job_id(job_id)
+        if jd is None or not jd.raw_text or not jd.raw_text.strip():
+            raise BadRequestError("Job description text is empty")
+
+        latex_key = r2_storage.key_from_url(user.original_resume_latex_url)
+        original_latex = r2_storage.download_text(latex_key)
+
+        parsed = _parse_latex_sections(original_latex)
+        
+        _STRUCTURAL_KEYS = {"header", "footer"}
+        valid_sections = [s for s in payload.sections if s in parsed and s not in _STRUCTURAL_KEYS]
+
+        if not valid_sections:
+            raise BadRequestError("No valid sections found to optimize")
+
+        llm = LLMClient(provider=user.llm_provider, api_key=llm_key)
+        
+        extra_kws = ", ".join(payload.extra_keywords) if payload.extra_keywords else "None"
+
+        async def _optimize(section: str):
+            cfg = _SECTION_PROMPTS.get(section)
+            if not cfg: return section, None
+            block = parsed.get(section)
+            if not block or not block.strip(): return section, None
+            
+            prompt = cfg["user"].format(
+                job_description=jd.raw_text,
+                extra_keywords=extra_kws,
+                **{cfg["arg"]: block},
+            )
+            new_block = await llm.complete(
+                system=cfg["system"],
+                user=prompt,
+                model=user.current_llm_model,
+                max_tokens=8192,
+            )
+            cleaned = _clean_llm_latex_output(new_block)
+            return section, cleaned
+
+        tasks = [_optimize(s) for s in valid_sections]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        optimized_sections: dict[str, str] = {}
+        for res in results:
+            if isinstance(res, Exception): continue
+            section, new_block = res
+            if new_block and _validate_latex(new_block):
+                optimized_sections[section] = new_block
+
+        from app.resumes.models import ResumePreview
+        from datetime import datetime, timezone, timedelta
+        
+        section_diffs = []
+        section_diffs_db = {}
+        
+        for section in valid_sections:
+            orig = parsed.get(section, "")
+            opt = optimized_sections.get(section, orig)
+            opt_stripped, _ = _strip_all_section_headings(opt)
+            
+            if not opt_stripped.strip():
+                opt = orig
+                opt_stripped = orig
+                
+            changes = _extract_bullet_diffs(section, orig, opt_stripped)
+            section_diffs.append(SectionDiff(
+                section_key=section,
+                section_title=section.replace("_", " ").title(),
+                changes=[BulletChange(**c) for c in changes]
+            ))
+            section_diffs_db[section] = changes
+            
+        preview = ResumePreview(
+            job_id=job_id,
+            user_id=user.id,
+            original_latex=original_latex,
+            section_diffs=section_diffs_db,
+            extra_keywords=payload.extra_keywords or [],
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7)
+        )
+        self.db.add(preview)
+        await self.db.commit()
+        await self.db.refresh(preview)
+        
+        return PreviewResponse(
+            preview_id=preview.id,
+            sections=section_diffs,
+            expires_at=preview.expires_at
+        )
+
+    async def finalize_preview(
+        self, job_id: uuid.UUID, payload: FinalizeRequest, user: User
+    ) -> FinalizeResponse:
+        from app.resumes.models import ResumePreview
+        from sqlalchemy import select
+        
+        job = await self.job_repo.get_by_id(job_id)
+        if job is None:
+            raise NotFoundError("Job", str(job_id))
+        self.assert_ownership(job, user.id, "job")
+            
+        result = await self.db.execute(
+            select(ResumePreview)
+            .where(ResumePreview.id == payload.preview_id)
+            .where(ResumePreview.user_id == user.id)
+            .where(ResumePreview.job_id == job_id)
+        )
+        preview = result.scalar_one_or_none()
+        
+        if not preview:
+            raise NotFoundError("ResumePreview", str(payload.preview_id))
+            
+        accepted_ids = set(payload.accepted_change_ids)
+        parsed = _parse_latex_sections(preview.original_latex)
+        
+        optimized_sections = {}
+        accepted_count = 0
+        rejected_count = 0
+        
+        for section, changes in preview.section_diffs.items():
+            rebuilt_blocks = []
+            for c in changes:
+                if c["change_type"] == "unchanged":
+                    rebuilt_blocks.append(c["original_text"])
+                elif c["change_id"] in accepted_ids:
+                    rebuilt_blocks.append(c["optimized_text"])
+                    accepted_count += 1
+                else:
+                    rebuilt_blocks.append(c["original_text"])
+                    rejected_count += 1
+                    
+            optimized_sections[section] = "".join(rebuilt_blocks)
+            
+        optimized_latex = _reconstruct_latex(
+            preview.original_latex, parsed, optimized_sections
+        )
+        
+        validated = _validate_latex(optimized_latex)
+        
+        assigned_slot = _slot_name_from_url(job.optimized_resume_pdf_url) or _slot_name_from_url(job.optimized_resume_latex_url)
+        if not assigned_slot:
+            ai_jobs = await self.job_repo.list_jobs_with_ai_resumes(user.id)
+            used_slots = {
+                _slot_name_from_url(j.optimized_resume_pdf_url) or _slot_name_from_url(j.optimized_resume_latex_url): j 
+                for j in ai_jobs
+            }
+            used_slots = {k: v for k, v in used_slots.items() if k}
+            free_slots = [s for s in _SLOTS if s not in used_slots]
+            if free_slots:
+                assigned_slot = free_slots[0]
+            else:
+                oldest_job = min(used_slots.values(), key=lambda j: j.updated_at or j.created_at)
+                assigned_slot = _slot_name_from_url(oldest_job.optimized_resume_pdf_url) or _slot_name_from_url(oldest_job.optimized_resume_latex_url) or "slot_1"
+                await self.job_repo.update(oldest_job, optimized_resume_latex_url=None, optimized_resume_pdf_url=None)
+                
+        ai_tex_key = f"resume/{user.id}/{assigned_slot}.tex"
+        ai_pdf_key = f"resume/{user.id}/{assigned_slot}.pdf"
+        
+        latex_url = r2_storage.upload_text(ai_tex_key, optimized_latex, RESUME_TEX_CONTENT_TYPE)
+        
+        pdf_url = None
+        pdf_bytes = await _compile_latex_to_pdf_via_api(optimized_latex, self.db)
+        if pdf_bytes:
+            pdf_url = r2_storage.upload_bytes(ai_pdf_key, pdf_bytes, RESUME_PDF_CONTENT_TYPE)
+            
+        await self.job_repo.update(job, optimized_resume_latex_url=latex_url, optimized_resume_pdf_url=pdf_url)
+        
+        download_url = r2_storage.generate_presigned_get_url(r2_storage.key_from_url(pdf_url), PRESIGN_EXPIRY_SECONDS) if pdf_url else None
+        
+        return FinalizeResponse(
+            download_url=download_url,
+            validated=validated,
+            accepted_count=accepted_count,
+            rejected_count=rejected_count
         )
 
     async def generate_ai(
@@ -413,6 +734,7 @@ class ResumeService(BaseService):
             )
             prompt = cfg["user"].format(
                 job_description=jd.raw_text,
+                extra_keywords="None",
                 **{cfg["arg"]: block},
             )
             new_block = await llm.complete(
